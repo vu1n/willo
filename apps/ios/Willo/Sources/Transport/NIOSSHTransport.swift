@@ -33,6 +33,64 @@ private actor SSHTransportState {
     }
 }
 
+/// Thread-safe container for data callbacks (matches MoshTransport pattern)
+private final class SSHDataCallbackState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callback: ((Data) -> Void)?
+    private var pendingData: [Data] = []
+    private var isPrimaryCallbackSet = false
+
+    /// Set a primary callback for data delivery
+    func setPrimaryCallback(_ cb: @escaping (Data) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        callback = cb
+        isPrimaryCallbackSet = true
+        // Flush any pending data
+        for data in pendingData {
+            cb(data)
+        }
+        pendingData.removeAll()
+    }
+
+    /// Set a secondary callback (from dataStream). Only works if no primary callback is set.
+    func setSecondaryCallback(_ cb: @escaping (Data) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        if isPrimaryCallbackSet { return }
+        callback = cb
+        for data in pendingData {
+            cb(data)
+        }
+        pendingData.removeAll()
+    }
+
+    func clearCallback() {
+        lock.lock()
+        defer { lock.unlock() }
+        callback = nil
+        isPrimaryCallbackSet = false
+    }
+
+    func deliverData(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cb = callback {
+            cb(data)
+        } else {
+            pendingData.append(data)
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        defer { lock.unlock() }
+        callback = nil
+        isPrimaryCallbackSet = false
+        pendingData.removeAll()
+    }
+}
+
 /// NIOSSH-based SSH Transport with PTY support for iOS
 ///
 /// Uses Apple's swift-nio-ssh directly for SSH connections.
@@ -45,6 +103,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     private var shellChannel: Channel?
     private let group: MultiThreadedEventLoopGroup
     private let stateActor = SSHTransportState()
+    private let dataCallbackState = SSHDataCallbackState()
 
     /// Current terminal size
     private var terminalCols: UInt16
@@ -69,6 +128,17 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     func initializeStreams() {
         _ = stateStream
         _ = dataStream
+    }
+
+    /// Set a direct callback for data - this is the PREFERRED method
+    /// Takes priority over dataStream subscriptions
+    func setDataCallback(_ callback: @escaping (Data) -> Void) {
+        dataCallbackState.setPrimaryCallback(callback)
+    }
+
+    /// Clear the data callback
+    func clearDataCallback() {
+        dataCallbackState.clearCallback()
     }
 
     init(config: TransportConfig) {
@@ -250,6 +320,9 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
 
     /// Thread-safe handler for incoming data
     private func handleIncomingData(_ data: Data) {
+        // Deliver via callback (preferred) - will also buffer if no callback yet
+        dataCallbackState.deliverData(data)
+        // Also yield to async stream for backwards compatibility
         Task { await stateActor.yieldData(data) }
     }
 
@@ -266,6 +339,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
 
         await stateActor.setState(.disconnected)
         await stateActor.finishData()
+        dataCallbackState.finish()
     }
 
     // MARK: - I/O

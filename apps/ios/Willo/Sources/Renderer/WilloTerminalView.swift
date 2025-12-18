@@ -1,6 +1,11 @@
 import MetalKit
+#if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 
+#if os(iOS)
 /// Custom Metal-based terminal view for Willo
 ///
 /// This view renders terminal content using Metal for optimal performance.
@@ -289,6 +294,40 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         // Notify transport of resize
         onResize?(cols, rows)
+    }
+
+    /// Update font size and rebuild glyph atlas
+    func updateFontSize(_ newSize: CGFloat) {
+        guard let device = self.device else { return }
+
+        let clampedSize = max(14.0, min(32.0, newSize))
+        print("[Terminal] Updating font size to \(clampedSize)pt")
+
+        // Rebuild glyph atlas with new size
+        glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
+
+        // Update cell metrics
+        if let atlas = glyphAtlas {
+            cellWidth = atlas.cellWidth > 0 ? atlas.cellWidth : 12.0
+            cellHeight = atlas.cellHeight > 0 ? atlas.cellHeight : 24.0
+            print("[Terminal] New cell size: \(cellWidth)x\(cellHeight)")
+        }
+
+        // Recalculate grid dimensions based on new cell size
+        let size = bounds.size
+        if size.width > 0 && size.height > 0 {
+            let newCols = max(1, Int(size.width / cellWidth))
+            let newRows = max(1, Int(size.height / cellHeight))
+
+            if newCols != cols || newRows != rows {
+                resizeGrid(rows: newRows, cols: newCols)
+            } else {
+                // Same grid size, just redraw with new font
+                setNeedsDisplay()
+            }
+        } else {
+            setNeedsDisplay()
+        }
     }
 
     // MARK: - MTKViewDelegate
@@ -633,3 +672,37 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         onInput?(data)
     }
 }
+#else
+// macOS stub - the full implementation is iOS-only
+final class WilloTerminalView: MTKView, MTKViewDelegate {
+    typealias RenderCell = WilloTerminal.RenderCell
+
+    var onInput: ((Data) -> Void)?
+    var onResize: ((Int, Int) -> Void)?
+
+    private(set) var rows: Int = 24
+    private(set) var cols: Int = 80
+    private var terminal: WilloTerminal?
+
+    override init(frame: CGRect, device: MTLDevice?) {
+        super.init(frame: frame, device: device)
+        self.delegate = self
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    convenience init(frame: CGRect = .zero) {
+        self.init(frame: frame, device: MTLCreateSystemDefaultDevice())
+    }
+
+    func feed(_ data: Data) {}
+    func feed(_ string: String) {}
+    func updateGrid(cells: [RenderCell]) {}
+    func resizeGrid(rows: Int, cols: Int) {}
+
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func draw(in view: MTKView) {}
+}
+#endif

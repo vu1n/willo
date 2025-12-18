@@ -8,27 +8,48 @@ struct ServerProfilesView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(appState.serverProfiles) { profile in
-                    ServerProfileRow(profile: profile) {
-                        editingProfile = profile
+            VStack(spacing: 0) {
+                if appState.serverProfiles.isEmpty {
+                    // Empty state
+                    EmptyServersView {
+                        showingNewProfile = true
+                    }
+                } else {
+                    // Server list
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(appState.serverProfiles) { profile in
+                                ServerProfileCard(profile: profile) {
+                                    editingProfile = profile
+                                } onDelete: {
+                                    deleteProfile(profile)
+                                }
+                            }
+                        }
+                        .padding(16)
                     }
                 }
-                .onDelete(perform: deleteProfiles)
             }
+            .background(Color.machineDark)
             .navigationTitle("Servers")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbarBackground(Color.machineGray, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(.willoMono(.callout, weight: .semibold))
+                            .foregroundStyle(Color.terminalCyan)
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
+                    IndustrialIconButton(icon: "plus", activeColor: .terminalCyan) {
                         showingNewProfile = true
-                    } label: {
-                        Image(systemName: "plus")
                     }
                 }
             }
@@ -45,65 +66,172 @@ struct ServerProfilesView: View {
                     isNew: true
                 )
             }
-            .overlay {
-                if appState.serverProfiles.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Servers", systemImage: "server.rack")
-                    } description: {
-                        Text("Add a server to get started")
-                    } actions: {
-                        Button("Add Server") {
-                            showingNewProfile = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-            }
         }
+        .preferredColorScheme(.dark)
     }
 
-    private func deleteProfiles(at offsets: IndexSet) {
-        appState.serverProfiles.remove(atOffsets: offsets)
+    private func deleteProfile(_ profile: ServerProfile) {
+        withAnimation {
+            appState.serverProfiles.removeAll { $0.id == profile.id }
+        }
     }
 }
 
-struct ServerProfileRow: View {
+// MARK: - Empty State
+
+private struct EmptyServersView: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 16) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(Color.textTertiary)
+
+                Text("No Servers")
+                    .font(.willoMono(.title2, weight: .semibold))
+                    .foregroundStyle(Color.textSecondary)
+
+                Text("Add a server to connect via SSH or Mosh")
+                    .font(.willoCaption)
+                    .foregroundStyle(Color.textTertiary)
+                    .multilineTextAlignment(.center)
+            }
+
+            IndustrialButton(
+                title: "Add Server",
+                icon: "plus.circle.fill",
+                style: .primary,
+                size: .large
+            ) {
+                onAdd()
+            }
+
+            Spacer()
+        }
+        .padding(32)
+    }
+}
+
+// MARK: - Server Profile Card
+
+private struct ServerProfileCard: View {
     let profile: ServerProfile
     let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var showingDeleteConfirm = false
 
     var body: some View {
         Button(action: onEdit) {
-            HStack {
+            HStack(spacing: 14) {
+                // Server icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.machineBlack)
+                        .frame(width: 48, height: 48)
+
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.terminalCyan)
+                }
+
+                // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(profile.displayName)
-                        .font(.headline)
+                        .font(.willoMono(.headline, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
 
                     Text(profile.connectionString)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.willoCaption)
+                        .foregroundStyle(Color.textTertiary)
 
+                    // Tags
                     HStack(spacing: 8) {
-                        Label(profile.multiplexer.displayName, systemImage: "rectangle.split.3x1")
+                        if profile.preferMosh {
+                            MiniTag(text: "MOSH", color: .terminalAmber)
+                        }
+
+                        MiniTag(text: profile.multiplexer.displayName.uppercased(), color: .terminalBlue)
+
                         if let lastConnected = profile.lastConnected {
-                            Text("·")
+                            Text("•")
+                                .foregroundStyle(Color.textTertiary)
                             Text(lastConnected, style: .relative)
+                                .font(.willoCaption)
+                                .foregroundStyle(Color.textTertiary)
                         }
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
                 }
 
                 Spacer()
 
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                // Actions
+                HStack(spacing: 8) {
+                    Button {
+                        showingDeleteConfirm = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.terminalRed.opacity(0.7))
+                            .frame(width: 32, height: 32)
+                            .background {
+                                Circle()
+                                    .fill(Color.terminalRed.opacity(0.1))
+                            }
+                    }
+                    .buttonStyle(.plain)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.textTertiary)
+                }
             }
-            .contentShape(Rectangle())
+            .padding(14)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.machineGray)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.bezelLight.opacity(0.2), lineWidth: 1)
+                    }
+            }
         }
         .buttonStyle(.plain)
+        .confirmationDialog("Delete Server", isPresented: $showingDeleteConfirm) {
+            Button("Delete", role: .destructive) {
+                onDelete()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete \"\(profile.displayName)\"?")
+        }
     }
 }
+
+// MARK: - Mini Tag
+
+private struct MiniTag: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background {
+                Capsule()
+                    .fill(color.opacity(0.15))
+            }
+    }
+}
+
+// MARK: - Profile Editor View
 
 struct ProfileEditorView: View {
     @Environment(\.dismiss) var dismiss
@@ -113,7 +241,6 @@ struct ProfileEditorView: View {
     @State private var password: String = ""
     let isNew: Bool
 
-    // Map auth method to picker index
     private var authMethodType: Int {
         switch profile.authMethod {
         case .key: return 0
@@ -125,7 +252,6 @@ struct ProfileEditorView: View {
     init(profile: ServerProfile, isNew: Bool) {
         self._profile = State(initialValue: profile)
         self.isNew = isNew
-        // Extract password from profile if it exists
         if case .password(let pwd) = profile.authMethod {
             self._password = State(initialValue: pwd)
         }
@@ -133,108 +259,157 @@ struct ProfileEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Connection") {
-                    TextField("Display Name", text: $profile.displayName)
-                    TextField("Hostname", text: $profile.hostname)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        #endif
-                        .autocorrectionDisabled()
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Connection section
+                    EditorSection(title: "Connection", icon: "network") {
+                        VStack(spacing: 12) {
+                            EditorField(label: "Display Name", text: $profile.displayName, placeholder: "My Server")
 
-                    HStack {
-                        Text("Port")
-                        Spacer()
-                        TextField("22", value: $profile.port, format: .number)
-                            #if os(iOS)
-                            .keyboardType(.numberPad)
-                            #endif
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                    }
+                            EditorField(label: "Hostname", text: $profile.hostname, placeholder: "server.example.com")
+                                #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                .keyboardType(.URL)
+                                #endif
 
-                    TextField("Username", text: $profile.username)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
-                }
+                            HStack(spacing: 12) {
+                                EditorField(label: "Username", text: $profile.username, placeholder: "user")
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
 
-                Section("Authentication") {
-                    Picker("Method", selection: Binding(
-                        get: { authMethodType },
-                        set: { newType in
-                            switch newType {
-                            case 0: profile.authMethod = .key(keyId: nil)
-                            case 1: profile.authMethod = .password(password)
-                            case 2: profile.authMethod = .agent
-                            default: break
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("PORT")
+                                        .font(.willoSectionHeader)
+                                        .foregroundStyle(Color.textTertiary)
+
+                                    TextField("22", value: $profile.port, format: .number)
+                                        .font(.willoMono(.body))
+                                        .foregroundStyle(Color.textPrimary)
+                                        #if os(iOS)
+                                        .keyboardType(.numberPad)
+                                        #endif
+                                        .padding(12)
+                                        .recessedPanel()
+                                        .frame(width: 80)
+                                }
                             }
                         }
-                    )) {
-                        Text("SSH Key").tag(0)
-                        Text("Password").tag(1)
-                        Text("SSH Agent").tag(2)
                     }
 
-                    // Show password field when password auth is selected
-                    if profile.authMethod.isPassword {
-                        SecureField("Password", text: $password)
-                            #if os(iOS)
-                            .textInputAutocapitalization(.never)
-                            #endif
-                            .autocorrectionDisabled()
-                    }
+                    // Authentication section
+                    EditorSection(title: "Authentication", icon: "key") {
+                        VStack(spacing: 12) {
+                            // Auth method picker
+                            HStack(spacing: 8) {
+                                AuthMethodButton(title: "SSH Key", icon: "key.fill", isSelected: authMethodType == 0) {
+                                    profile.authMethod = .key(keyId: nil)
+                                }
+                                AuthMethodButton(title: "Password", icon: "lock.fill", isSelected: authMethodType == 1) {
+                                    profile.authMethod = .password(password)
+                                }
+                                AuthMethodButton(title: "Agent", icon: "person.fill", isSelected: authMethodType == 2) {
+                                    profile.authMethod = .agent
+                                }
+                            }
 
-                    // TODO: Key selection UI for SSH Key auth
-                }
-
-                Section("Connection Type") {
-                    Toggle("Use Mosh", isOn: $profile.preferMosh)
-
-                    if profile.preferMosh {
-                        Text("Mosh provides better responsiveness over high-latency or unreliable connections")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Session") {
-                    Picker("Multiplexer", selection: $profile.multiplexer) {
-                        ForEach(MultiplexerPreference.allCases, id: \.self) { pref in
-                            Text(pref.displayName).tag(pref)
+                            // Password field when selected
+                            if profile.authMethod.isPassword {
+                                SecureField("Password", text: $password)
+                                    .font(.willoMono(.body))
+                                    .foregroundStyle(Color.textPrimary)
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
+                                    .autocorrectionDisabled()
+                                    .padding(12)
+                                    .recessedPanel()
+                            }
                         }
                     }
 
-                    TextField("Session Template", text: $profile.sessionTemplate)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
-                        .font(.system(.body, design: .monospaced))
+                    // Connection type section
+                    EditorSection(title: "Connection Type", icon: "bolt") {
+                        VStack(spacing: 12) {
+                            Toggle(isOn: $profile.preferMosh) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "bolt.fill")
+                                        .foregroundStyle(profile.preferMosh ? Color.terminalAmber : Color.textTertiary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Use Mosh")
+                                            .font(.willoMono(.body, weight: .medium))
+                                            .foregroundStyle(Color.textPrimary)
+                                        Text("Better for high-latency connections")
+                                            .font(.willoCaption)
+                                            .foregroundStyle(Color.textTertiary)
+                                    }
+                                }
+                            }
+                            .tint(.terminalAmber)
+                        }
+                    }
+
+                    // Session section
+                    EditorSection(title: "Session", icon: "terminal") {
+                        VStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("MULTIPLEXER")
+                                    .font(.willoSectionHeader)
+                                    .foregroundStyle(Color.textTertiary)
+
+                                HStack(spacing: 8) {
+                                    ForEach(MultiplexerPreference.allCases, id: \.self) { pref in
+                                        MultiplexerButton(
+                                            preference: pref,
+                                            isSelected: profile.multiplexer == pref
+                                        ) {
+                                            profile.multiplexer = pref
+                                        }
+                                    }
+                                }
+                            }
+
+                            EditorField(label: "Session Template", text: $profile.sessionTemplate, placeholder: "willo/{user}/{host}")
+                                #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                #endif
+                        }
+                    }
                 }
+                .padding(20)
             }
+            .background(Color.machineDark)
             .navigationTitle(isNew ? "New Server" : "Edit Server")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbarBackground(Color.machineGray, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(Color.textSecondary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button {
                         saveProfile()
+                    } label: {
+                        Text("Save")
+                            .font(.willoMono(.callout, weight: .semibold))
+                            .foregroundStyle(canSave ? Color.terminalCyan : Color.textTertiary)
                     }
-                    .disabled(profile.displayName.isEmpty || profile.hostname.isEmpty || profile.username.isEmpty)
+                    .disabled(!canSave)
                 }
             }
         }
+        .preferredColorScheme(.dark)
+    }
+
+    private var canSave: Bool {
+        !profile.displayName.isEmpty && !profile.hostname.isEmpty && !profile.username.isEmpty
     }
 
     private func saveProfile() {
-        // Sync password to authMethod before saving
         if case .password = profile.authMethod {
             profile.authMethod = .password(password)
         }
@@ -245,6 +420,108 @@ struct ProfileEditorView: View {
             appState.serverProfiles[index] = profile
         }
         dismiss()
+    }
+}
+
+// MARK: - Editor Components
+
+private struct EditorSection<Content: View>: View {
+    let title: String
+    let icon: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.terminalCyan)
+
+                Text(title.uppercased())
+                    .font(.willoSectionHeader)
+                    .tracking(1.5)
+                    .foregroundStyle(Color.textSecondary)
+            }
+
+            content()
+                .padding(16)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.machineGray)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.bezelLight.opacity(0.2), lineWidth: 1)
+                        }
+                }
+        }
+    }
+}
+
+private struct EditorField: View {
+    let label: String
+    @Binding var text: String
+    var placeholder: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label.uppercased())
+                .font(.willoSectionHeader)
+                .foregroundStyle(Color.textTertiary)
+
+            TextField(placeholder, text: $text)
+                .font(.willoMono(.body))
+                .foregroundStyle(Color.textPrimary)
+                .autocorrectionDisabled()
+                .padding(12)
+                .recessedPanel()
+        }
+    }
+}
+
+private struct AuthMethodButton: View {
+    let title: String
+    let icon: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                Text(title)
+                    .font(.willoCaption)
+            }
+            .foregroundStyle(isSelected ? Color.machineBlack : Color.textSecondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.terminalCyan : Color.bezelGray)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MultiplexerButton: View {
+    let preference: MultiplexerPreference
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(preference.displayName)
+                .font(.willoMono(.caption, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.machineBlack : Color.textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? Color.terminalCyan : Color.bezelGray)
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -262,7 +539,8 @@ struct ProfileEditorView: View {
                 ServerProfile(
                     displayName: "Production",
                     hostname: "prod.example.com",
-                    username: "deploy"
+                    username: "deploy",
+                    preferMosh: true
                 ),
             ]
             return state

@@ -220,6 +220,7 @@ struct AppearanceToggleCompact: View {
     }
 }
 
+#if os(iOS)
 #Preview("Full Toggle") {
     VStack(spacing: 40) {
         AppearanceToggle(settings: AppearanceSettings())
@@ -239,3 +240,4 @@ struct AppearanceToggleCompact: View {
     .padding(40)
     .background(Color(.systemBackground))
 }
+#endif

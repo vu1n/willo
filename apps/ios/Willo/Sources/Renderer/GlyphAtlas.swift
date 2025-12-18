@@ -1,6 +1,10 @@
 import CoreText
 import MetalKit
+#if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// Glyph atlas for terminal text rendering
 ///
@@ -37,8 +41,10 @@ final class GlyphAtlas {
     private var glyphCache: [GlyphKey: GlyphInfo] = [:]
 
     /// Current packing position in the atlas
-    private var packX: Int = 0
-    private var packY: Int = 0
+    /// Start at (2,2) to reserve (0,0) corner as guaranteed transparent
+    /// for empty cells that sample at texCoord (0,0)
+    private var packX: Int = 2
+    private var packY: Int = 2
     private var rowHeight: Int = 0
 
     /// Atlas dimensions
@@ -93,36 +99,61 @@ final class GlyphAtlas {
         // Try Bundle.module first (SPM resources), then Bundle.main
         let bundles = [Bundle.module, Bundle.main]
 
+        print("[GlyphAtlas] Searching for fonts in bundles:")
+        print("[GlyphAtlas]   Bundle.module: \(Bundle.module.bundlePath)")
+        print("[GlyphAtlas]   Bundle.main: \(Bundle.main.bundlePath)")
+
         for fontName in fontNames {
             var registered = false
             for bundle in bundles {
                 // Try direct path first
                 if let fontURL = bundle.url(forResource: fontName, withExtension: "ttf") {
+                    print("[GlyphAtlas] Found \(fontName) at: \(fontURL.path)")
                     registered = registerFont(at: fontURL, name: fontName)
                     if registered { break }
                 }
                 // Try Fonts subdirectory
                 if let fontURL = bundle.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts") {
+                    print("[GlyphAtlas] Found \(fontName) in Fonts/ at: \(fontURL.path)")
                     registered = registerFont(at: fontURL, name: fontName)
                     if registered { break }
                 }
             }
             if !registered {
-                print("[GlyphAtlas] Font not found: \(fontName)")
+                print("[GlyphAtlas] ❌ Font not found: \(fontName)")
             }
         }
     }
 
+    /// Maps font file names to their actual PostScript names (discovered at registration)
+    private static var fontPostScriptNames: [String: String] = [:]
+
     private static func registerFont(at url: URL, name: String) -> Bool {
         var error: Unmanaged<CFError>?
         if CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) {
-            print("[GlyphAtlas] Registered font: \(name) from \(url.lastPathComponent)")
+            // Get the actual PostScript name from the registered font
+            if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
+               let descriptor = descriptors.first,
+               let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
+                fontPostScriptNames[name] = psName
+                print("[GlyphAtlas] Registered font: \(name) → PostScript name: '\(psName)'")
+            } else {
+                print("[GlyphAtlas] Registered font: \(name) (couldn't get PostScript name)")
+            }
             return true
         } else if let cfError = error?.takeRetainedValue() {
             // Error code 105 means font is already registered - that's OK
             let nsError = cfError as Error as NSError
             if nsError.code == 105 {
-                print("[GlyphAtlas] Font already registered: \(name)")
+                // Still try to get the PostScript name
+                if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
+                   let descriptor = descriptors.first,
+                   let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
+                    fontPostScriptNames[name] = psName
+                    print("[GlyphAtlas] Font already registered: \(name) → PostScript name: '\(psName)'")
+                } else {
+                    print("[GlyphAtlas] Font already registered: \(name)")
+                }
                 return true
             }
             print("[GlyphAtlas] Failed to register font \(name): \(cfError)")
@@ -132,17 +163,37 @@ final class GlyphAtlas {
 
     private func setupFonts() {
         // Use JetBrains Mono if available, fallback to Menlo
-        // CTFontCreateWithName always returns a font (falls back to system font)
-        let fontNames = ["JetBrainsMonoNerdFont-Regular", "JetBrainsMono-Regular", "Menlo-Regular"]
+        // First try the discovered PostScript names from registration, then fallbacks
+        var fontNamesToTry: [String] = []
 
-        for fontName in fontNames {
+        // Add discovered PostScript name for Nerd Font if we have it
+        if let nerdFontPS = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"] {
+            fontNamesToTry.append(nerdFontPS)
+        }
+        // Add original names as fallback
+        fontNamesToTry.append(contentsOf: ["JetBrainsMonoNerdFont-Regular", "JetBrainsMono-Regular", "Menlo-Regular"])
+
+        print("[GlyphAtlas] Looking for fonts: \(fontNamesToTry)")
+
+        for fontName in fontNamesToTry {
             let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
             // Check if we got the font we asked for (not a fallback)
             if let actualName = CTFontCopyPostScriptName(font) as String? {
                 print("[GlyphAtlas] Requested '\(fontName)', got '\(actualName)'")
                 if actualName == fontName {
                     regularFont = font
-                    print("[GlyphAtlas] Using font: \(actualName)")
+                    print("[GlyphAtlas] ✅ Using font: \(actualName)")
+
+                    // Test if font has box drawing characters
+                    let testCodepoint: UInt32 = 0x2502 // │ BOX DRAWINGS LIGHT VERTICAL
+                    var glyph: CGGlyph = 0
+                    var codepoints = [UniChar](repeating: 0, count: 2)
+                    let scalar = Unicode.Scalar(testCodepoint)!
+                    let str = String(Character(scalar))
+                    (str as NSString).getCharacters(&codepoints)
+                    let hasBoxDrawing = CTFontGetGlyphsForCharacters(font, codepoints, &glyph, 1)
+                    print("[GlyphAtlas] Font has box drawing (U+2502): \(hasBoxDrawing), glyph: \(glyph)")
+
                     break
                 }
             }
@@ -151,7 +202,7 @@ final class GlyphAtlas {
         // Fallback to system monospace
         if regularFont == nil {
             regularFont = CTFontCreateWithName("Menlo-Regular" as CFString, fontSize, nil)
-            print("[GlyphAtlas] Fallback to Menlo")
+            print("[GlyphAtlas] ⚠️ Fallback to Menlo")
         }
 
         guard let regular = regularFont else { return }
@@ -249,9 +300,14 @@ final class GlyphAtlas {
         let char = Character(scalar)
 
         // Create attributed string with WHITE foreground color
+        #if os(iOS)
+        let textColor = UIColor.white
+        #else
+        let textColor = NSColor.white
+        #endif
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font as Any,
-            .foregroundColor: UIColor.white  // CRITICAL: Set text color to white
+            .foregroundColor: textColor  // CRITICAL: Set text color to white
         ]
         let attrString = NSAttributedString(string: String(char), attributes: attributes)
         let line = CTLineCreateWithAttributedString(attrString)
@@ -287,34 +343,62 @@ final class GlyphAtlas {
         let bytesPerRow = bitmapWidth
         var bitmapData = [UInt8](repeating: 0, count: bitmapWidth * bitmapHeight)
 
-        // Use UIGraphicsImageRenderer which handles coordinate systems correctly
-        // UIKit has Y=0 at top, which matches Metal
+        // Render glyph to bitmap using cross-platform approach
+        #if os(iOS)
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: bitmapWidth, height: bitmapHeight))
         let image = renderer.image { rendererCtx in
-            // Draw white text on transparent background
             UIColor.black.setFill()
             rendererCtx.fill(CGRect(x: 0, y: 0, width: bitmapWidth, height: bitmapHeight))
-
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: UIColor.white
             ]
-
             let str = String(char)
             str.draw(at: CGPoint(x: CGFloat(glyphPadding), y: CGFloat(glyphPadding)), withAttributes: attrs)
         }
-
-        // Extract grayscale pixel data from the rendered image
         guard let cgImage = image.cgImage else { return nil }
+        #else
+        // macOS: Use Core Graphics directly
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: bitmapWidth,
+            height: bitmapHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: bitmapWidth * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
 
-        let colorSpace = CGColorSpaceCreateDeviceGray()
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: bitmapWidth, height: bitmapHeight))
+
+        // Flip coordinate system for text
+        ctx.textMatrix = .identity
+        ctx.translateBy(x: 0, y: CGFloat(bitmapHeight))
+        ctx.scaleBy(x: 1, y: -1)
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white
+        ]
+        let str = NSAttributedString(string: String(char), attributes: attrs)
+        let framesetter = CTFramesetterCreateWithAttributedString(str)
+        let path = CGPath(rect: CGRect(x: glyphPadding, y: glyphPadding, width: bitmapWidth, height: bitmapHeight), transform: nil)
+        let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, str.length), path, nil)
+        CTFrameDraw(frame, ctx)
+
+        guard let cgImage = ctx.makeImage() else { return nil }
+        #endif
+
+        let grayColorSpace = CGColorSpaceCreateDeviceGray()
         guard let extractContext = CGContext(
             data: &bitmapData,
             width: bitmapWidth,
             height: bitmapHeight,
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
-            space: colorSpace,
+            space: grayColorSpace,
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else {
             return nil

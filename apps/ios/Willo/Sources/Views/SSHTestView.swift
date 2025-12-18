@@ -20,14 +20,21 @@ struct SSHTestView: View {
             Form {
                 Section("Connection") {
                     TextField("Host", text: $host)
+                        #if os(iOS)
                         .textInputAutocapitalization(.never)
+                        .keyboardType(.asciiCapable)
+                        #endif
                         .autocorrectionDisabled()
 
                     TextField("Port", text: $port)
+                        #if os(iOS)
                         .keyboardType(.numberPad)
+                        #endif
 
                     TextField("Username", text: $username)
+                        #if os(iOS)
                         .textInputAutocapitalization(.never)
+                        #endif
                         .autocorrectionDisabled()
 
                     SecureField("Password", text: $password)
@@ -84,7 +91,9 @@ struct SSHTestView: View {
                     HStack {
                         TextField("Command...", text: $inputText)
                             .textFieldStyle(.roundedBorder)
+                            #if os(iOS)
                             .textInputAutocapitalization(.never)
+                            #endif
                             .autocorrectionDisabled()
 
                         Button("Send") {

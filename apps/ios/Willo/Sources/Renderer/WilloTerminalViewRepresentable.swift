@@ -1,6 +1,7 @@
 import MetalKit
 import SwiftUI
 
+#if os(iOS)
 /// SwiftUI wrapper for WilloTerminalView with transport integration
 struct WilloTerminalViewRepresentable: UIViewRepresentable {
     typealias UIViewType = WilloTerminalView
@@ -8,14 +9,23 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     /// Transport to read data from (optional)
     let transport: TerminalTransport?
 
+    /// Font size for terminal rendering
+    var fontSize: CGFloat
+
     /// Callback for input data (key presses)
     var onInput: ((Data) -> Void)?
 
     /// Callback for resize events
     var onResize: ((Int, Int) -> Void)?  // (cols, rows)
 
-    init(transport: TerminalTransport? = nil, onInput: ((Data) -> Void)? = nil, onResize: ((Int, Int) -> Void)? = nil) {
+    init(
+        transport: TerminalTransport? = nil,
+        fontSize: CGFloat = 24.0,
+        onInput: ((Data) -> Void)? = nil,
+        onResize: ((Int, Int) -> Void)? = nil
+    ) {
         self.transport = transport
+        self.fontSize = fontSize
         self.onInput = onInput
         self.onResize = onResize
     }
@@ -24,6 +34,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     class Coordinator {
         var terminalView: WilloTerminalView?
         var dataTask: Task<Void, Never>?
+        var currentFontSize: CGFloat = 24.0
 
         deinit {
             dataTask?.cancel()
@@ -37,6 +48,12 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> WilloTerminalView {
         let view = WilloTerminalView(frame: .zero)
         context.coordinator.terminalView = view
+        context.coordinator.currentFontSize = fontSize
+
+        // Apply initial font size if different from default
+        if abs(fontSize - 24.0) > 0.5 {
+            view.updateFontSize(fontSize)
+        }
 
         // Wire up input callback
         let inputCallback = onInput
@@ -60,25 +77,38 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WilloTerminalView, context: Context) {
-        // Updates handled by data stream
+        // Check if font size changed
+        if abs(fontSize - context.coordinator.currentFontSize) > 0.5 {
+            context.coordinator.currentFontSize = fontSize
+            uiView.updateFontSize(fontSize)
+        }
     }
 
     private func startDataStream(transport: TerminalTransport, context: Context) {
         // Cancel any existing subscription
         context.coordinator.dataTask?.cancel()
 
-        // Use callback-based approach to avoid AsyncStream multiple consumer issues
+        // Use callback-based approach for both Mosh and SSH transports
+        // This avoids AsyncStream multiple consumer issues with TransportPTYBridge
+        let coordinator = context.coordinator
+
         if let moshTransport = transport as? MoshTransport {
-            print("[TerminalView] Setting up direct data callback")
-            let coordinator = context.coordinator
+            print("[TerminalView] Setting up Mosh data callback")
             moshTransport.setDataCallback { [weak coordinator] data in
-                print("[TerminalView] Received \(data.count) bytes via callback")
                 // Must dispatch to main thread since callback comes from background
                 DispatchQueue.main.async {
                     if let view = coordinator?.terminalView {
                         view.feed(data)
-                    } else {
-                        print("[TerminalView] WARNING: terminalView is nil!")
+                    }
+                }
+            }
+        } else if let sshTransport = transport as? NIOSSHTransport {
+            print("[TerminalView] Setting up SSH data callback")
+            sshTransport.setDataCallback { [weak coordinator] data in
+                // Must dispatch to main thread since callback comes from background
+                DispatchQueue.main.async {
+                    if let view = coordinator?.terminalView {
+                        view.feed(data)
                     }
                 }
             }
@@ -87,11 +117,8 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
             context.coordinator.dataTask = Task { @MainActor in
                 print("[TerminalView] Starting data stream subscription (fallback)")
                 for await data in transport.dataStream {
-                    print("[TerminalView] Received \(data.count) bytes from transport")
                     if let view = context.coordinator.terminalView {
                         view.feed(data)
-                    } else {
-                        print("[TerminalView] WARNING: terminalView is nil!")
                     }
                 }
                 print("[TerminalView] Data stream ended")
@@ -112,10 +139,12 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
 /// Simple terminal view for sessions (connects transport to terminal)
 struct SessionTerminalView: View {
     let session: TerminalSession
+    @EnvironmentObject var appearanceSettings: AppearanceSettings
 
     var body: some View {
         WilloTerminalViewRepresentable(
             transport: session.transport,
+            fontSize: appearanceSettings.fontSize,
             onInput: { data in
                 Task {
                     try? await session.transport.send(data)
@@ -195,3 +224,36 @@ struct MetalTerminalDemoView: View {
         MetalTerminalDemoView()
     }
 }
+#else
+// macOS stubs
+struct WilloTerminalViewRepresentable: NSViewRepresentable {
+    let transport: TerminalTransport?
+    var onInput: ((Data) -> Void)?
+    var onResize: ((Int, Int) -> Void)?
+
+    init(transport: TerminalTransport? = nil, onInput: ((Data) -> Void)? = nil, onResize: ((Int, Int) -> Void)? = nil) {
+        self.transport = transport
+        self.onInput = onInput
+        self.onResize = onResize
+    }
+
+    class Coordinator {}
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+struct SessionTerminalView: View {
+    let session: TerminalSession
+    var body: some View {
+        Color.black
+    }
+}
+
+struct MetalTerminalDemoView: View {
+    var body: some View {
+        Color.black
+            .navigationTitle("Metal Terminal")
+    }
+}
+#endif

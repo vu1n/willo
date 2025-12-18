@@ -29,6 +29,9 @@ Carthage/Build/
 # Vendor frameworks (large binaries)
 vendor/frameworks/
 
+# xcframeworks (large binaries - should be downloaded or built separately)
+*.xcframework/
+
 # Build artifacts
 *.o
 *.a

@@ -75,8 +75,9 @@ final class SessionManager: ObservableObject {
             // Connect transport
             try await session.transport.connect()
 
-            // Start PTY bridge
-            session.bridge?.start()
+            // NOTE: PTY bridge is NOT started - data flows directly from transport
+            // to WilloTerminalViewRepresentable via callbacks. The PTYBridge was
+            // causing issues by consuming dataStream before the view could.
 
             // Set initial terminal size
             try await session.resize(cols: 80, rows: 24)

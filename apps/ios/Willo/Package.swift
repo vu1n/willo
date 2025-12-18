@@ -22,19 +22,19 @@ let package = Package(
             name: "WilloPkg",
             dependencies: [
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
-                "GhosttyKit",
+                "willo",
                 "mosh",
                 "Protobuf_C_",
             ],
             path: "Sources",
             resources: [
-                .copy("../Resources/Fonts"),
+                .copy("Resources/Fonts"),
                 .process("Renderer/TerminalShaders.metal")
             ]
         ),
         .binaryTarget(
-            name: "GhosttyKit",
-            path: "../../../build/xcframeworks/GhosttyKit.xcframework"
+            name: "willo",
+            path: "Frameworks/willo.xcframework"
         ),
         .binaryTarget(
             name: "mosh",

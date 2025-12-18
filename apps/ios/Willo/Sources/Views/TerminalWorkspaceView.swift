@@ -4,58 +4,44 @@ struct TerminalWorkspaceView: View {
     let workspace: Workspace
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var appearanceSettings: AppearanceSettings
     @State private var session: TerminalSession?
     @State private var sessionState: SessionState = .disconnected
-    @State private var showingZellijSidebar = false
+    @State private var showingSettings = false
+    @State private var showingCommandPalette = false
     @State private var connectionError: Error?
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Main terminal view
+        VStack(spacing: 0) {
+            // Unified status bar
+            TerminalStatusBar(
+                workspace: workspace,
+                sessionState: sessionState,
+                onCommandPalette: { showingCommandPalette = true },
+                onSettings: { showingSettings = true },
+                onDisconnect: { Task { await disconnect() } },
+                onReconnect: { Task { await connect() } }
+            )
+
+            // Terminal view
             TerminalContainerView(session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Zellij sidebar (collapsible)
-            if showingZellijSidebar, session != nil {
-                Divider()
-                ZellijSidebarView(session: ZellijSession(
-                    id: workspace.sessionName,
-                    tabs: [], // TODO: Populate from real zellij state
-                    activeTabIndex: 0
-                ))
-                .frame(width: 280)
-                .transition(.move(edge: .trailing))
+        }
+        .background(Color.machineBlack)
+        .sheet(isPresented: $showingSettings) {
+            TerminalSettingsSheet()
+        }
+        .sheet(isPresented: $showingCommandPalette) {
+            if let session = session {
+                CommandPaletteView { data in
+                    Task {
+                        try? await session.transport.send(data)
+                    }
+                }
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                // Disconnect button (only when connected)
-                if session != nil, sessionState == .connected {
-                    Button {
-                        Task { await disconnect() }
-                    } label: {
-                        Image(systemName: "xmark.circle")
-                    }
-                    .help("Disconnect")
-                }
-
-                ConnectionStatusButton(state: sessionState) {
-                    Task { await connect() }
-                }
-
-                Button {
-                    withAnimation {
-                        showingZellijSidebar.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.trailing")
-                }
-                .help("Toggle Zellij sidebar")
-            }
-        }
-        .navigationTitle(workspace.displayTitle)
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         #endif
         .task {
             await connect()
@@ -78,10 +64,8 @@ struct TerminalWorkspaceView: View {
     private func connect() async {
         sessionState = .connecting
         do {
-            // Calculate terminal size from available screen space
             let terminalSize = calculateTerminalSize()
 
-            // Create session config from workspace
             var config = SessionConfig(
                 name: workspace.sessionName,
                 host: workspace.serverProfile.hostname,
@@ -94,13 +78,10 @@ struct TerminalWorkspaceView: View {
             config.terminalRows = terminalSize.rows
             print("[Terminal] Connecting with size: \(terminalSize.cols)x\(terminalSize.rows)")
 
-            // Create session - use Mosh flow if preferred
             let newSession: TerminalSession
             if workspace.serverProfile.preferMosh {
-                // Mosh: SSH bootstrap -> get mosh key/port -> UDP connection
                 newSession = try await sessionManager.createMoshSession(config: config)
             } else {
-                // Plain SSH
                 newSession = try await sessionManager.createSession(config: config)
             }
 
@@ -120,23 +101,20 @@ struct TerminalWorkspaceView: View {
         sessionState = .disconnected
     }
 
-    /// Calculate terminal dimensions based on available screen space
     private func calculateTerminalSize() -> (cols: UInt16, rows: UInt16) {
-        // Cell dimensions from GlyphAtlas (24pt font)
         let cellWidth: CGFloat = 15.0
         let cellHeight: CGFloat = 28.0
+        var availableSize = CGSize(width: 800, height: 600)
 
-        // Get the current window scene bounds
-        var availableSize = CGSize(width: 800, height: 600)  // Fallback
-
+        #if os(iOS)
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             let bounds = windowScene.coordinateSpace.bounds
-            // Account for navigation bar (~50pt) and some padding
             availableSize = CGSize(
-                width: bounds.width - 20,  // Small horizontal padding
-                height: bounds.height - 100  // Nav bar + status bar + padding
+                width: bounds.width - 20,
+                height: bounds.height - 100
             )
         }
+        #endif
 
         let cols = max(40, min(200, UInt16(availableSize.width / cellWidth)))
         let rows = max(10, min(60, UInt16(availableSize.height / cellHeight)))
@@ -145,105 +123,239 @@ struct TerminalWorkspaceView: View {
     }
 }
 
-struct ConnectionStatusButton: View {
-    let state: SessionState
-    let action: () -> Void
+// MARK: - Terminal Status Bar
+
+struct TerminalStatusBar: View {
+    let workspace: Workspace
+    let sessionState: SessionState
+    let onCommandPalette: () -> Void
+    let onSettings: () -> Void
+    let onDisconnect: () -> Void
+    let onReconnect: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                SessionStatusDot(state: state)
-                Text(state.statusText)
-                    .font(.caption)
+        HStack(spacing: 12) {
+            // Status indicator with host info
+            HStack(spacing: 10) {
+                StatusLED(status: ledStatus, size: 8)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(workspace.serverProfile.displayName)
+                        .font(.willoMono(.subheadline, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+
+                    HStack(spacing: 6) {
+                        Text(sessionState.statusText)
+                            .font(.willoCaption)
+                            .foregroundStyle(sessionState.color)
+
+                        if sessionState == .connected {
+                            Text("•")
+                                .foregroundStyle(Color.textTertiary)
+                            Text(workspace.sessionName)
+                                .font(.willoCaption)
+                                .foregroundStyle(Color.textTertiary)
+                        }
+                    }
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: Capsule())
+
+            Spacer()
+
+            // Action buttons
+            HStack(spacing: 6) {
+                // Command palette (only when connected)
+                if sessionState == .connected {
+                    IndustrialIconButton(icon: "command", isActive: false, activeColor: .terminalCyan) {
+                        onCommandPalette()
+                    }
+                    .help("Zellij Commands (⌘K)")
+                }
+
+                // Settings
+                IndustrialIconButton(icon: "gearshape", isActive: false) {
+                    onSettings()
+                }
+                .help("Settings")
+
+                // Disconnect/Reconnect
+                if sessionState == .connected {
+                    IndustrialIconButton(icon: "xmark.circle", activeColor: .terminalRed) {
+                        onDisconnect()
+                    }
+                    .help("Disconnect")
+                } else if sessionState == .disconnected || sessionState == .error(NSError()) {
+                    IndustrialIconButton(icon: "bolt.fill", isActive: true, activeColor: .terminalGreen) {
+                        onReconnect()
+                    }
+                    .help("Connect")
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background {
+            Rectangle()
+                .fill(Color.machineGray)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Color.bezelLight.opacity(0.2))
+                        .frame(height: 1)
+                }
+        }
+    }
+
+    private var ledStatus: StatusLED.LEDStatus {
+        switch sessionState {
+        case .disconnected: return .disconnected
+        case .connecting, .reconnecting: return .connecting
+        case .connected: return .connected
+        case .error: return .error
+        }
     }
 }
 
-struct SessionStatusDot: View {
-    let state: SessionState
-
-    var body: some View {
-        Circle()
-            .fill(state.color)
-            .frame(width: 8, height: 8)
-    }
-}
+// MARK: - Session State Extensions
 
 extension SessionState {
     var statusText: String {
         switch self {
         case .disconnected: return "Disconnected"
-        case .connecting: return "Connecting..."
+        case .connecting: return "Connecting"
         case .connected: return "Connected"
-        case .reconnecting: return "Reconnecting..."
+        case .reconnecting: return "Reconnecting"
         case .error: return "Error"
         }
     }
 
     var color: Color {
         switch self {
-        case .disconnected: return .gray
-        case .connecting: return .yellow
-        case .connected: return .green
-        case .reconnecting: return .orange
-        case .error: return .red
+        case .disconnected: return .textTertiary
+        case .connecting: return .terminalAmber
+        case .connected: return .terminalGreen
+        case .reconnecting: return .terminalAmber
+        case .error: return .terminalRed
         }
     }
 }
 
+// MARK: - Terminal Container
+
 struct TerminalContainerView: View {
     let session: TerminalSession?
+    @EnvironmentObject var appearanceSettings: AppearanceSettings
 
     var body: some View {
         ZStack {
-            Color.black
+            Color.machineBlack
                 .ignoresSafeArea()
 
             if let session = session {
-                // Terminal view using WilloTerminalView (Metal renderer)
                 SessionTerminalView(session: session)
 
-                // Reconnecting overlay
                 if case .reconnecting = session.state {
                     ReconnectingOverlay(attempt: 1)
                 }
             } else {
-                // Loading state
-                ProgressView()
-                    .tint(.white)
+                ConnectingView()
             }
         }
     }
 }
 
-struct ReconnectingOverlay: View {
-    let attempt: Int
+// MARK: - Connecting View
+
+private struct ConnectingView: View {
+    @State private var rotation: Double = 0
 
     var body: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.5)
-                .tint(.white)
+        VStack(spacing: 20) {
+            // Animated terminal icon
+            ZStack {
+                Circle()
+                    .stroke(Color.terminalCyan.opacity(0.2), lineWidth: 2)
+                    .frame(width: 64, height: 64)
 
-            Text("Reconnecting...")
-                .font(.headline)
-                .foregroundColor(.white)
+                Circle()
+                    .trim(from: 0, to: 0.3)
+                    .stroke(Color.terminalCyan, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 64, height: 64)
+                    .rotationEffect(.degrees(rotation))
 
-            Text("Attempt \(attempt)")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.7))
+                Image(systemName: "terminal")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Color.terminalCyan)
+            }
 
-            Text("Your session is safe on the server")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.5))
+            Text("ESTABLISHING CONNECTION")
+                .font(.willoSectionHeader)
+                .tracking(2)
+                .foregroundStyle(Color.textSecondary)
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+        }
+    }
+}
+
+// MARK: - Reconnecting Overlay
+
+struct ReconnectingOverlay: View {
+    let attempt: Int
+    @State private var pulse = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            // Pulsing indicator
+            ZStack {
+                Circle()
+                    .fill(Color.terminalAmber.opacity(0.1))
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(pulse ? 1.2 : 1)
+                    .opacity(pulse ? 0 : 0.5)
+
+                Circle()
+                    .fill(Color.terminalAmber.opacity(0.2))
+                    .frame(width: 60, height: 60)
+
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Color.terminalAmber)
+            }
+
+            VStack(spacing: 8) {
+                Text("RECONNECTING")
+                    .font(.willoSectionHeader)
+                    .tracking(2)
+                    .foregroundStyle(Color.terminalAmber)
+
+                Text("Attempt \(attempt)")
+                    .font(.willoCaption)
+                    .foregroundStyle(Color.textTertiary)
+
+                Text("Session preserved on server")
+                    .font(.willoCaption)
+                    .foregroundStyle(Color.textTertiary)
+                    .padding(.top, 4)
+            }
         }
         .padding(32)
-        .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.machineGray.opacity(0.95))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.terminalAmber.opacity(0.3), lineWidth: 1)
+                }
+        }
+        .shadow(color: .black.opacity(0.5), radius: 20)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
     }
 }
 
@@ -263,18 +375,18 @@ extension ServerProfile {
 }
 
 #Preview {
-    NavigationStack {
-        TerminalWorkspaceView(
-            workspace: Workspace(
-                serverProfile: ServerProfile(
-                    displayName: "Devbox",
-                    hostname: "devbox.local",
-                    username: "dev"
-                ),
-                sessionName: "willo/dev/main/devbox"
-            )
+    TerminalWorkspaceView(
+        workspace: Workspace(
+            serverProfile: ServerProfile(
+                displayName: "Devbox",
+                hostname: "devbox.local",
+                username: "dev"
+            ),
+            sessionName: "willo/dev/main/devbox"
         )
-        .environmentObject(AppState())
-        .environmentObject(SessionManager(appManager: GhosttyAppManager()))
-    }
+    )
+    .environmentObject(AppState())
+    .environmentObject(SessionManager(appManager: GhosttyAppManager()))
+    .environmentObject(AppearanceSettings())
+    .preferredColorScheme(.dark)
 }

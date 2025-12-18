@@ -41,6 +41,18 @@ final class AppearanceSettings: ObservableObject {
         }
     }
 
+    /// Terminal font size (14-32pt range)
+    @Published var fontSize: CGFloat {
+        didSet {
+            UserDefaults.standard.set(fontSize, forKey: "terminalFontSize")
+        }
+    }
+
+    /// Default font size
+    static let defaultFontSize: CGFloat = 24.0
+    static let minFontSize: CGFloat = 14.0
+    static let maxFontSize: CGFloat = 32.0
+
     init() {
         // Load saved mode or default to system
         if let savedValue = UserDefaults.standard.string(forKey: "appearanceMode"),
@@ -48,6 +60,14 @@ final class AppearanceSettings: ObservableObject {
             self.mode = savedMode
         } else {
             self.mode = .system
+        }
+
+        // Load saved font size or default
+        let savedFontSize = UserDefaults.standard.double(forKey: "terminalFontSize")
+        if savedFontSize >= Self.minFontSize && savedFontSize <= Self.maxFontSize {
+            self.fontSize = savedFontSize
+        } else {
+            self.fontSize = Self.defaultFontSize
         }
     }
 
