@@ -1,0 +1,45 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# iOS
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Vendor frameworks (large binaries)
+vendor/frameworks/
+
+# Build artifacts
+*.o
+*.a
+
+# IDE
+.idea/
+*.sublime-*
+
+# Environment
+.env
+.env.local
+
+# Beads (local issue tracking)
+.beads/
