@@ -346,6 +346,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     func resize(cols: UInt16, rows: UInt16) async throws {
+        print("[Mosh] resize() called with \(cols)x\(rows), current: \(terminalCols)x\(terminalRows)")
+
         terminalCols = cols
         terminalRows = rows
 
@@ -354,6 +356,9 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         if let ptr = windowSizePtr {
             ptr.pointee.ws_col = cols
             ptr.pointee.ws_row = rows
+            print("[Mosh] Updated windowSizePtr to \(ptr.pointee.ws_col)x\(ptr.pointee.ws_row)")
+        } else {
+            print("[Mosh] WARNING: windowSizePtr is nil!")
         }
 
         // Send SIGWINCH to the mosh thread to trigger resize handling
@@ -362,8 +367,9 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         moshThreadLock.unlock()
 
         if let tid = tid {
-            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows)")
-            pthread_kill(tid, SIGWINCH)
+            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows), tid=\(tid)")
+            let result = pthread_kill(tid, SIGWINCH)
+            print("[Mosh] pthread_kill result: \(result) (0 = success)")
         } else {
             print("[Mosh] Cannot send SIGWINCH - mosh thread not running")
         }
