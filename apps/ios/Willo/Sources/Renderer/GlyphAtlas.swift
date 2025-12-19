@@ -228,14 +228,27 @@ final class GlyphAtlas {
         cellHeight = ceil(ascent + descent + leading)
         baseline = ceil(descent)
 
-        // Get advance width for 'M' (representative character)
-        var glyph = CTFontGetGlyphWithName(regular, "M" as CFString)
+        // Get advance width for 'M' using character lookup (more reliable than glyph name)
+        var chars: [UniChar] = [0x4D] // 'M' character
+        var glyphs: [CGGlyph] = [0]
+        let gotGlyphs = CTFontGetGlyphsForCharacters(regular, &chars, &glyphs, 1)
+
         var advance: CGSize = .zero
-        CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyph, &advance, 1)
-        cellWidth = ceil(advance.width)
+        if gotGlyphs && glyphs[0] != 0 {
+            CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyphs, &advance, 1)
+            cellWidth = ceil(advance.width)
+        } else {
+            // Fallback: estimate based on font size (monospace fonts are ~0.6x font size)
+            cellWidth = ceil(fontSize * 0.6)
+            print("[GlyphAtlas] WARNING: Could not get glyph for 'M', using estimate")
+        }
+
+        // Ensure minimum cell size
+        if cellWidth < 1 { cellWidth = ceil(fontSize * 0.6) }
+        if cellHeight < 1 { cellHeight = ceil(fontSize * 1.2) }
 
         print("[GlyphAtlas] Font metrics for \(fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
-        print("[GlyphAtlas] Cell metrics: width=\(cellWidth), height=\(cellHeight), advance.width=\(advance.width)")
+        print("[GlyphAtlas] Cell metrics: width=\(cellWidth), height=\(cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
     }
 
     private func createTexture() {
