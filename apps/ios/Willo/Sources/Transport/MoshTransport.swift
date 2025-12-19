@@ -122,6 +122,14 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     private var terminalCols: UInt16
     private var terminalRows: UInt16
 
+    /// Window size struct - persisted for mosh to read on SIGWINCH
+    /// Must remain valid for the lifetime of the mosh session
+    private var windowSize = winsize()
+
+    /// Thread ID of the mosh thread for sending SIGWINCH
+    private var moshThreadId: pthread_t?
+    private let moshThreadLock = NSLock()
+
     var state: TransportState {
         get async { await stateActor.state }
     }
@@ -224,6 +232,11 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     private func runMosh() {
+        // Store the thread ID for SIGWINCH signaling
+        moshThreadLock.lock()
+        moshThreadId = pthread_self()
+        moshThreadLock.unlock()
+
         // Convert file descriptors to FILE*
         guard let f_in = fdopen(inputReadFd, "r"),
               let f_out = fdopen(outputWriteFd, "w") else {
@@ -237,8 +250,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         // Disable buffering on output so data flows immediately
         setvbuf(f_out, nil, _IONBF, 0)
 
-        // Set up window size
-        var windowSize = winsize(
+        // Set up window size using the instance property
+        windowSize = winsize(
             ws_row: terminalRows,
             ws_col: terminalCols,
             ws_xpixel: 0,
@@ -272,6 +285,11 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         fclose(f_in)
         fclose(f_out)
 
+        // Clear the thread ID
+        moshThreadLock.lock()
+        moshThreadId = nil
+        moshThreadLock.unlock()
+
         Task { [weak self] in
             self?.isRunning = false
             await self?.stateActor.setState(.disconnected)
@@ -281,6 +299,12 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
 
     func disconnect() async throws {
         isRunning = false
+
+        // Clear the thread ID
+        moshThreadLock.lock()
+        moshThreadId = nil
+        moshThreadLock.unlock()
+
         closePipes()
         await stateActor.setState(.disconnected)
         dataCallbackState.finish()
@@ -313,9 +337,22 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     func resize(cols: UInt16, rows: UInt16) async throws {
         terminalCols = cols
         terminalRows = rows
-        // Note: Mosh handles resize internally via SIGWINCH
-        // For runtime resize during active session, we'd need to signal mosh
-        // This is a limitation of the pipe-based approach
+
+        // Update the window size struct that mosh reads on SIGWINCH
+        windowSize.ws_col = cols
+        windowSize.ws_row = rows
+
+        // Send SIGWINCH to the mosh thread to trigger resize handling
+        moshThreadLock.lock()
+        let tid = moshThreadId
+        moshThreadLock.unlock()
+
+        if let tid = tid {
+            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows)")
+            pthread_kill(tid, SIGWINCH)
+        } else {
+            print("[Mosh] Cannot send SIGWINCH - mosh thread not running")
+        }
     }
 
     // MARK: - Private
