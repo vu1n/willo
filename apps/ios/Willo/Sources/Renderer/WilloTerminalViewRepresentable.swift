@@ -147,23 +147,46 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
 struct SessionTerminalView: View {
     let session: TerminalSession
     @EnvironmentObject var appearanceSettings: AppearanceSettings
+    @State private var currentSize: (cols: Int, rows: Int) = (80, 24)
+    @State private var viewBounds: CGSize = .zero
 
     var body: some View {
-        WilloTerminalViewRepresentable(
-            transport: session.transport,
-            fontSize: appearanceSettings.fontSize,
-            onInput: { data in
-                Task {
-                    try? await session.transport.send(data)
+        GeometryReader { geometry in
+            ZStack(alignment: .topTrailing) {
+                WilloTerminalViewRepresentable(
+                    transport: session.transport,
+                    fontSize: appearanceSettings.fontSize,
+                    onInput: { data in
+                        Task {
+                            try? await session.transport.send(data)
+                        }
+                    },
+                    onResize: { cols, rows in
+                        currentSize = (cols, rows)
+                        Task {
+                            try? await session.transport.resize(cols: UInt16(cols), rows: UInt16(rows))
+                        }
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Debug overlay showing current dimensions
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Grid: \(currentSize.cols)x\(currentSize.rows)")
+                    Text("View: \(Int(geometry.size.width))x\(Int(geometry.size.height))")
+                    Text("Font: \(Int(appearanceSettings.fontSize))pt")
                 }
-            },
-            onResize: { cols, rows in
-                Task {
-                    try? await session.transport.resize(cols: UInt16(cols), rows: UInt16(rows))
-                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(4)
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(4)
+                .padding(8)
             }
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: geometry.size) { newSize in
+                viewBounds = newSize
+            }
+        }
     }
 }
 
