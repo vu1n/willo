@@ -285,9 +285,9 @@ struct NewWorkspaceView: View {
             .navigationTitle("New Session")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbarBackground(Color.machineGray, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            #endif
         }
         .preferredColorScheme(.dark)
     }

@@ -303,39 +303,61 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Update font size and rebuild glyph atlas
     func updateFontSize(_ newSize: CGFloat) {
-        guard let device = self.device else { return }
+        guard let device = self.device else {
+            print("[Terminal] updateFontSize - NO DEVICE!")
+            return
+        }
 
         let clampedSize = max(14.0, min(32.0, newSize))
-        print("[Terminal] updateFontSize called with \(newSize)pt (clamped to \(clampedSize)pt)")
+        print("[Terminal] ===== updateFontSize START =====")
+        print("[Terminal] Requested: \(newSize)pt, clamped: \(clampedSize)pt")
+        print("[Terminal] BEFORE - cellWidth: \(cellWidth), cellHeight: \(cellHeight), grid: \(cols)x\(rows)")
 
         // Rebuild glyph atlas with new size
         glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
 
-        // Update cell metrics
+        // Update cell metrics - ALWAYS update, don't keep old values
         if let atlas = glyphAtlas {
-            cellWidth = atlas.cellWidth > 0 ? atlas.cellWidth : 12.0
-            cellHeight = atlas.cellHeight > 0 ? atlas.cellHeight : 24.0
-            print("[Terminal] Atlas cell size: \(atlas.cellWidth)x\(atlas.cellHeight), using: \(cellWidth)x\(cellHeight)")
+            let oldWidth = cellWidth
+            let oldHeight = cellHeight
+            cellWidth = atlas.cellWidth
+            cellHeight = atlas.cellHeight
+            print("[Terminal] Atlas returned: cellWidth=\(atlas.cellWidth), cellHeight=\(atlas.cellHeight)")
+            print("[Terminal] Cell size changed: \(oldWidth)x\(oldHeight) → \(cellWidth)x\(cellHeight)")
+
+            // Sanity check - if atlas returns 0, something is very wrong
+            if cellWidth <= 0 || cellHeight <= 0 {
+                print("[Terminal] ERROR: Atlas returned invalid cell size! Using fallback.")
+                cellWidth = ceil(clampedSize * 0.6)
+                cellHeight = ceil(clampedSize * 1.2)
+                print("[Terminal] Fallback cell size: \(cellWidth)x\(cellHeight)")
+            }
+        } else {
+            print("[Terminal] ERROR: GlyphAtlas creation failed!")
+            cellWidth = ceil(clampedSize * 0.6)
+            cellHeight = ceil(clampedSize * 1.2)
         }
 
         // Recalculate grid dimensions based on new cell size
         let size = bounds.size
-        print("[Terminal] updateFontSize - bounds: \(size)")
+        print("[Terminal] View bounds: \(size.width)x\(size.height)")
+
         if size.width > 0 && size.height > 0 {
             let newCols = max(1, Int(size.width / cellWidth))
             let newRows = max(1, Int(size.height / cellHeight))
 
-            print("[Terminal] updateFontSize - calculated grid: \(newCols)x\(newRows), current: \(cols)x\(rows)")
-            if newCols != cols || newRows != rows {
-                resizeGrid(rows: newRows, cols: newCols)
-            } else {
-                // Same grid size, just redraw with new font
-                setNeedsDisplay()
-            }
+            print("[Terminal] Grid calculation: \(size.width)/\(cellWidth) = \(newCols) cols")
+            print("[Terminal] Grid calculation: \(size.height)/\(cellHeight) = \(newRows) rows")
+            print("[Terminal] Current grid: \(cols)x\(rows), New grid: \(newCols)x\(newRows)")
+
+            // ALWAYS resize on font change - even if grid dimensions happen to match
+            print("[Terminal] RESIZING GRID: \(cols)x\(rows) → \(newCols)x\(newRows)")
+            resizeGrid(rows: newRows, cols: newCols)
         } else {
-            print("[Terminal] updateFontSize - bounds are zero, skipping resize calculation")
+            print("[Terminal] WARNING: bounds are zero (\(size)), skipping resize")
             setNeedsDisplay()
         }
+        print("[Terminal] ===== updateFontSize END =====")
     }
 
     // MARK: - MTKViewDelegate

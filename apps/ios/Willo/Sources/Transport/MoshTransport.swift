@@ -114,8 +114,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     private var outputReadFd: Int32 = -1
     private var outputWriteFd: Int32 = -1
 
-    // Background queue for mosh_main (blocks until disconnect)
-    private let moshQueue = DispatchQueue(label: "com.willo.mosh", qos: .userInteractive)
+    // Thread for mosh_main (using pthread_create like Blink, not GCD)
+    private var moshThread: pthread_t?
     private var isRunning = false
 
     /// Terminal size
@@ -125,10 +125,6 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     /// Window size pointer - explicitly allocated so mosh and Swift share the same memory
     /// Must remain valid for the lifetime of the mosh session
     private var windowSizePtr: UnsafeMutablePointer<winsize>?
-
-    /// Thread ID of the mosh thread for sending SIGWINCH
-    private var moshThreadId: pthread_t?
-    private let moshThreadLock = NSLock()
 
     var state: TransportState {
         get async { await stateActor.state }
@@ -217,10 +213,30 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         // Start reading output in background
         startOutputReader()
 
-        // Run mosh_main on background queue
+        // Run mosh_main on a pthread (not GCD) - required for SIGWINCH to work
         isRunning = true
-        moshQueue.async { [weak self] in
-            self?.runMosh()
+
+        // Create thread using pthread_create like Blink does
+        // This is necessary because GCD threads don't receive signals properly
+        var thread: pthread_t?
+        let selfPtr = Unmanaged.passRetained(self).toOpaque()
+
+        let result = pthread_create(&thread, nil, { context -> UnsafeMutableRawPointer? in
+            let transport = Unmanaged<MoshTransport>.fromOpaque(context).takeRetainedValue()
+            transport.runMosh()
+            return nil
+        }, selfPtr)
+
+        if result != 0 {
+            Unmanaged<MoshTransport>.fromOpaque(selfPtr).release()
+            throw TransportError.connectionFailed("Failed to create mosh thread: \(result)")
+        }
+
+        moshThread = thread
+
+        // Detach the thread so it cleans up automatically
+        if let thread = thread {
+            pthread_detach(thread)
         }
 
         // Wait a moment for connection to establish
@@ -233,10 +249,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     private func runMosh() {
-        // Store the thread ID for SIGWINCH signaling
-        moshThreadLock.lock()
-        moshThreadId = pthread_self()
-        moshThreadLock.unlock()
+        // Thread ID is already stored by pthread_create in connect()
+        print("[Mosh] runMosh starting on thread \(pthread_self())")
 
         // Convert file descriptors to FILE*
         guard let f_in = fdopen(inputReadFd, "r"),
@@ -292,10 +306,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         windowSizePtr?.deallocate()
         windowSizePtr = nil
 
-        // Clear the thread ID
-        moshThreadLock.lock()
-        moshThreadId = nil
-        moshThreadLock.unlock()
+        // Clear the thread reference
+        moshThread = nil
 
         Task { [weak self] in
             self?.isRunning = false
@@ -307,10 +319,8 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     func disconnect() async throws {
         isRunning = false
 
-        // Clear the thread ID
-        moshThreadLock.lock()
-        moshThreadId = nil
-        moshThreadLock.unlock()
+        // Clear the thread reference
+        moshThread = nil
 
         // Clean up allocated memory
         windowSizePtr?.deallocate()
@@ -362,13 +372,10 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         }
 
         // Send SIGWINCH to the mosh thread to trigger resize handling
-        moshThreadLock.lock()
-        let tid = moshThreadId
-        moshThreadLock.unlock()
-
-        if let tid = tid {
-            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows), tid=\(tid)")
-            let result = pthread_kill(tid, SIGWINCH)
+        // moshThread is from pthread_create (not GCD), so pthread_kill should work
+        if let thread = moshThread {
+            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows), thread=\(thread)")
+            let result = pthread_kill(thread, SIGWINCH)
             print("[Mosh] pthread_kill result: \(result) (0 = success)")
         } else {
             print("[Mosh] Cannot send SIGWINCH - mosh thread not running")

@@ -81,13 +81,18 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
 
     func updateUIView(_ uiView: WilloTerminalView, context: Context) {
         // Check if font size changed
-        if abs(fontSize - context.coordinator.currentFontSize) > 0.5 {
+        let delta = abs(fontSize - context.coordinator.currentFontSize)
+        print("[Representable] updateUIView - fontSize: \(fontSize), stored: \(context.coordinator.currentFontSize), delta: \(delta)")
+
+        if delta > 0.5 {
+            print("[Representable] Font size changed! Calling updateFontSize(\(fontSize))")
             context.coordinator.currentFontSize = fontSize
             uiView.updateFontSize(fontSize)
 
             // Force layout to ensure bounds are correct before resize calculation
             uiView.setNeedsLayout()
             uiView.layoutIfNeeded()
+            print("[Representable] Layout forced, bounds now: \(uiView.bounds.size)")
         }
     }
 

@@ -34,9 +34,9 @@ struct ServerProfilesView: View {
             .navigationTitle("Servers")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbarBackground(Color.machineGray, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
@@ -382,9 +382,9 @@ struct ProfileEditorView: View {
             .navigationTitle(isNew ? "New Server" : "Edit Server")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbarBackground(Color.machineGray, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
