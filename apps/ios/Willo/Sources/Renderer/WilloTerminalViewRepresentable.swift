@@ -50,6 +50,9 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         context.coordinator.terminalView = view
         context.coordinator.currentFontSize = fontSize
 
+        // Ensure the view fills its container
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
         // Apply initial font size if different from default
         if abs(fontSize - 24.0) > 0.5 {
             view.updateFontSize(fontSize)
@@ -156,6 +159,7 @@ struct SessionTerminalView: View {
                 }
             }
         )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
