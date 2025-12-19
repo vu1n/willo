@@ -233,6 +233,9 @@ final class GlyphAtlas {
         var advance: CGSize = .zero
         CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyph, &advance, 1)
         cellWidth = ceil(advance.width)
+
+        print("[GlyphAtlas] Font metrics for \(fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
+        print("[GlyphAtlas] Cell metrics: width=\(cellWidth), height=\(cellHeight), advance.width=\(advance.width)")
     }
 
     private func createTexture() {

@@ -142,11 +142,16 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         // Recalculate grid size on layout changes
         let size = bounds.size
-        guard size.width > 0 && size.height > 0 else { return }
+        print("[Terminal] layoutSubviews called - bounds: \(size), cellSize: \(cellWidth)x\(cellHeight)")
+        guard size.width > 0 && size.height > 0 else {
+            print("[Terminal] layoutSubviews - bounds are zero, skipping")
+            return
+        }
 
         let newCols = max(1, Int(size.width / cellWidth))
         let newRows = max(1, Int(size.height / cellHeight))
 
+        print("[Terminal] layoutSubviews - calculated grid: \(newCols)x\(newRows), current: \(cols)x\(rows)")
         if newCols != cols || newRows != rows {
             print("[Terminal] layoutSubviews: \(size), grid: \(newCols)x\(newRows)")
             resizeGrid(rows: newRows, cols: newCols)
@@ -301,7 +306,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         guard let device = self.device else { return }
 
         let clampedSize = max(14.0, min(32.0, newSize))
-        print("[Terminal] Updating font size to \(clampedSize)pt")
+        print("[Terminal] updateFontSize called with \(newSize)pt (clamped to \(clampedSize)pt)")
 
         // Rebuild glyph atlas with new size
         glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
@@ -310,15 +315,17 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         if let atlas = glyphAtlas {
             cellWidth = atlas.cellWidth > 0 ? atlas.cellWidth : 12.0
             cellHeight = atlas.cellHeight > 0 ? atlas.cellHeight : 24.0
-            print("[Terminal] New cell size: \(cellWidth)x\(cellHeight)")
+            print("[Terminal] Atlas cell size: \(atlas.cellWidth)x\(atlas.cellHeight), using: \(cellWidth)x\(cellHeight)")
         }
 
         // Recalculate grid dimensions based on new cell size
         let size = bounds.size
+        print("[Terminal] updateFontSize - bounds: \(size)")
         if size.width > 0 && size.height > 0 {
             let newCols = max(1, Int(size.width / cellWidth))
             let newRows = max(1, Int(size.height / cellHeight))
 
+            print("[Terminal] updateFontSize - calculated grid: \(newCols)x\(newRows), current: \(cols)x\(rows)")
             if newCols != cols || newRows != rows {
                 resizeGrid(rows: newRows, cols: newCols)
             } else {
@@ -326,6 +333,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
                 setNeedsDisplay()
             }
         } else {
+            print("[Terminal] updateFontSize - bounds are zero, skipping resize calculation")
             setNeedsDisplay()
         }
     }

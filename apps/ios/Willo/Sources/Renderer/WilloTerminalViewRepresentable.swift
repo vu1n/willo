@@ -84,6 +84,10 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         if abs(fontSize - context.coordinator.currentFontSize) > 0.5 {
             context.coordinator.currentFontSize = fontSize
             uiView.updateFontSize(fontSize)
+
+            // Force layout to ensure bounds are correct before resize calculation
+            uiView.setNeedsLayout()
+            uiView.layoutIfNeeded()
         }
     }
 
