@@ -122,9 +122,9 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     private var terminalCols: UInt16
     private var terminalRows: UInt16
 
-    /// Window size struct - persisted for mosh to read on SIGWINCH
+    /// Window size pointer - explicitly allocated so mosh and Swift share the same memory
     /// Must remain valid for the lifetime of the mosh session
-    private var windowSize = winsize()
+    private var windowSizePtr: UnsafeMutablePointer<winsize>?
 
     /// Thread ID of the mosh thread for sending SIGWINCH
     private var moshThreadId: pthread_t?
@@ -189,6 +189,7 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     deinit {
+        windowSizePtr?.deallocate()
         closePipes()
     }
 
@@ -250,8 +251,10 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         // Disable buffering on output so data flows immediately
         setvbuf(f_out, nil, _IONBF, 0)
 
-        // Set up window size using the instance property
-        windowSize = winsize(
+        // Allocate window size struct - must be explicitly allocated so mosh
+        // and Swift share the same memory when we update it for SIGWINCH
+        windowSizePtr = UnsafeMutablePointer<winsize>.allocate(capacity: 1)
+        windowSizePtr!.pointee = winsize(
             ws_row: terminalRows,
             ws_col: terminalCols,
             ws_xpixel: 0,
@@ -268,7 +271,7 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         let result = mosh_main(
             f_in,
             f_out,
-            &windowSize,
+            windowSizePtr!,
             nil,    // state_callback (for session persistence)
             nil,    // state_callback_context
             config.host,
@@ -284,6 +287,10 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
 
         fclose(f_in)
         fclose(f_out)
+
+        // Clean up allocated memory
+        windowSizePtr?.deallocate()
+        windowSizePtr = nil
 
         // Clear the thread ID
         moshThreadLock.lock()
@@ -304,6 +311,10 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         moshThreadLock.lock()
         moshThreadId = nil
         moshThreadLock.unlock()
+
+        // Clean up allocated memory
+        windowSizePtr?.deallocate()
+        windowSizePtr = nil
 
         closePipes()
         await stateActor.setState(.disconnected)
@@ -339,8 +350,11 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         terminalRows = rows
 
         // Update the window size struct that mosh reads on SIGWINCH
-        windowSize.ws_col = cols
-        windowSize.ws_row = rows
+        // Using the pointer ensures mosh sees the same memory we're updating
+        if let ptr = windowSizePtr {
+            ptr.pointee.ws_col = cols
+            ptr.pointee.ws_row = rows
+        }
 
         // Send SIGWINCH to the mosh thread to trigger resize handling
         moshThreadLock.lock()
