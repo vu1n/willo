@@ -110,20 +110,24 @@ enum StartupBehavior: String, Codable, CaseIterable {
     }
 
     /// Returns the shell command to execute for the given multiplexer
-    func command(for multiplexer: MultiplexerPreference, sessionName: String?) -> String? {
+    /// - Parameters:
+    ///   - multiplexer: The multiplexer preference
+    ///   - sessionName: Optional session name for new sessions
+    ///   - userName: User name for zellij collaborative sessions (prevents duplicate user indicators)
+    func command(for multiplexer: MultiplexerPreference, sessionName: String?, userName: String = "willo") -> String? {
         switch self {
         case .bareShell:
             return nil
         case .attachLast:
             switch multiplexer {
-            case .zellij: return "zellij attach"
+            case .zellij: return "zellij attach --user-name \"\(userName)\""
             case .tmux: return "tmux attach || tmux"
             case .none: return nil
             }
         case .newSession:
             guard let name = sessionName else { return nil }
             switch multiplexer {
-            case .zellij: return "zellij attach -c \"\(name)\""
+            case .zellij: return "zellij attach -c \"\(name)\" --user-name \"\(userName)\""
             case .tmux: return "tmux new-session -A -s \"\(name)\""
             case .none: return nil
             }

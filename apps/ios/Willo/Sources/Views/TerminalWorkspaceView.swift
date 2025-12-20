@@ -125,9 +125,12 @@ struct TerminalWorkspaceView: View {
 
         // Get the startup command based on behavior
         let sessionName = expandSessionTemplate(profile.sessionTemplate, profile: profile)
+        // Use device name for zellij user identification (consistent across reconnects)
+        let deviceName = UIDevice.current.name.replacingOccurrences(of: " ", with: "-")
         guard let command = profile.startupBehavior.command(
             for: profile.multiplexer,
-            sessionName: sessionName
+            sessionName: sessionName,
+            userName: deviceName
         ) else { return }
 
         print("[Terminal] Executing startup command: \(command)")
