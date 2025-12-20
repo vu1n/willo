@@ -1,6 +1,7 @@
 import MetalKit
 #if os(iOS)
 import UIKit
+import GameController
 #else
 import AppKit
 #endif
@@ -74,6 +75,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     /// Resize callback - called when terminal grid dimensions change
     var onResize: ((Int, Int) -> Void)?  // (cols, rows)
 
+    /// Tracks whether a hardware keyboard is connected
+    private var hasHardwareKeyboard: Bool = false
+
+    /// Whether we should auto-show the software keyboard
+    private var shouldAutoShowKeyboard: Bool = true
+
     // MARK: - Initialization
 
     override init(frame: CGRect, device: MTLDevice?) {
@@ -133,8 +140,67 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
             print("WilloTerminalView: Metal rendering unavailable, using fallback")
         }
 
+        // Setup hardware keyboard detection
+        setupKeyboardDetection()
+
         // Trigger initial render
         setNeedsDisplay()
+    }
+
+    private func setupKeyboardDetection() {
+        // Check initial keyboard state
+        hasHardwareKeyboard = GCKeyboard.coalesced != nil
+        print("[Keyboard] Initial state - hardware keyboard: \(hasHardwareKeyboard)")
+
+        // Subscribe to keyboard connection notifications
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardDidConnect),
+            name: .GCKeyboardDidConnect,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardDidDisconnect),
+            name: .GCKeyboardDidDisconnect,
+            object: nil
+        )
+    }
+
+    @objc private func keyboardDidConnect(_ notification: Notification) {
+        hasHardwareKeyboard = true
+        print("[Keyboard] Hardware keyboard connected")
+    }
+
+    @objc private func keyboardDidDisconnect(_ notification: Notification) {
+        hasHardwareKeyboard = GCKeyboard.coalesced != nil
+        print("[Keyboard] Hardware keyboard disconnected, remaining: \(hasHardwareKeyboard)")
+
+        // Show software keyboard if no hardware keyboard and we should auto-show
+        if !hasHardwareKeyboard && shouldAutoShowKeyboard && !isFirstResponder {
+            DispatchQueue.main.async { [weak self] in
+                self?.becomeFirstResponder()
+            }
+        }
+    }
+
+    /// Called when the view is added to a window - good time to auto-show keyboard
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+
+        // Auto-show software keyboard when no hardware keyboard is attached
+        if window != nil && !hasHardwareKeyboard && shouldAutoShowKeyboard {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self, self.window != nil else { return }
+                if !self.isFirstResponder {
+                    self.becomeFirstResponder()
+                }
+            }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     override func layoutSubviews() {

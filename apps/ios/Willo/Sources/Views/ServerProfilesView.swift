@@ -369,10 +369,37 @@ struct ProfileEditorView: View {
                                 }
                             }
 
-                            EditorField(label: "Session Template", text: $profile.sessionTemplate, placeholder: "willo/{user}/{host}")
-                                #if os(iOS)
-                                .textInputAutocapitalization(.never)
-                                #endif
+                            // Startup behavior (only shown when multiplexer is not none)
+                            if profile.multiplexer != .none {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("ON CONNECT")
+                                        .font(.willoSectionHeader)
+                                        .foregroundStyle(Color.textTertiary)
+
+                                    HStack(spacing: 8) {
+                                        ForEach(StartupBehavior.allCases, id: \.self) { behavior in
+                                            StartupBehaviorButton(
+                                                behavior: behavior,
+                                                isSelected: profile.startupBehavior == behavior
+                                            ) {
+                                                profile.startupBehavior = behavior
+                                            }
+                                        }
+                                    }
+
+                                    Text(profile.startupBehavior.description)
+                                        .font(.willoCaption)
+                                        .foregroundStyle(Color.textTertiary)
+                                }
+                            }
+
+                            // Session template (only shown when using new session)
+                            if profile.multiplexer != .none && profile.startupBehavior == .newSession {
+                                EditorField(label: "Session Template", text: $profile.sessionTemplate, placeholder: "willo/{user}/{host}")
+                                    #if os(iOS)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
+                            }
                         }
                     }
                 }
@@ -519,6 +546,27 @@ private struct MultiplexerButton: View {
                 .background {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(isSelected ? Color.terminalCyan : Color.bezelGray)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct StartupBehaviorButton: View {
+    let behavior: StartupBehavior
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(behavior.displayName)
+                .font(.willoMono(.caption, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.machineBlack : Color.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? Color.terminalGreen : Color.bezelGray)
                 }
         }
         .buttonStyle(.plain)

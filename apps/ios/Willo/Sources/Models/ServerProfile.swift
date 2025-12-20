@@ -8,6 +8,7 @@ struct ServerProfile: Identifiable, Codable, Equatable, Hashable {
     var username: String
     var authMethod: AuthMethod
     var multiplexer: MultiplexerPreference
+    var startupBehavior: StartupBehavior
     var sessionTemplate: String
     var preferMosh: Bool
     var lastConnected: Date?
@@ -20,6 +21,7 @@ struct ServerProfile: Identifiable, Codable, Equatable, Hashable {
         username: String,
         authMethod: AuthMethod = .key(keyId: nil),
         multiplexer: MultiplexerPreference = .zellij,
+        startupBehavior: StartupBehavior = .newSession,
         sessionTemplate: String = "{project}/{env}/{role}/{host}",
         preferMosh: Bool = true,
         lastConnected: Date? = nil
@@ -31,6 +33,7 @@ struct ServerProfile: Identifiable, Codable, Equatable, Hashable {
         self.username = username
         self.authMethod = authMethod
         self.multiplexer = multiplexer
+        self.startupBehavior = startupBehavior
         self.sessionTemplate = sessionTemplate
         self.preferMosh = preferMosh
         self.lastConnected = lastConnected
@@ -80,6 +83,50 @@ enum MultiplexerPreference: String, Codable, CaseIterable {
         case .zellij: return "Zellij"
         case .tmux: return "tmux"
         case .none: return "None"
+        }
+    }
+}
+
+/// What to do after SSH/Mosh connection is established
+enum StartupBehavior: String, Codable, CaseIterable {
+    case bareShell      // Just connect, no multiplexer
+    case attachLast     // Attach to most recent session (zellij attach / tmux attach)
+    case newSession     // Create new session with name from template
+
+    var displayName: String {
+        switch self {
+        case .bareShell: return "Bare Shell"
+        case .attachLast: return "Attach Last"
+        case .newSession: return "New Session"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .bareShell: return "Just connect, no multiplexer"
+        case .attachLast: return "Attach to most recent session"
+        case .newSession: return "Create new session with name"
+        }
+    }
+
+    /// Returns the shell command to execute for the given multiplexer
+    func command(for multiplexer: MultiplexerPreference, sessionName: String?) -> String? {
+        switch self {
+        case .bareShell:
+            return nil
+        case .attachLast:
+            switch multiplexer {
+            case .zellij: return "zellij attach"
+            case .tmux: return "tmux attach || tmux"
+            case .none: return nil
+            }
+        case .newSession:
+            guard let name = sessionName else { return nil }
+            switch multiplexer {
+            case .zellij: return "zellij attach -c \"\(name)\""
+            case .tmux: return "tmux new-session -A -s \"\(name)\""
+            case .none: return nil
+            }
         }
     }
 }

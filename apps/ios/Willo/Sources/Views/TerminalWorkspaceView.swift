@@ -10,22 +10,42 @@ struct TerminalWorkspaceView: View {
     @State private var showingSettings = false
     @State private var showingCommandPalette = false
     @State private var connectionError: Error?
+    @StateObject private var voiceManager = VoiceInputManager()
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Unified status bar
-            TerminalStatusBar(
-                workspace: workspace,
-                sessionState: sessionState,
-                onCommandPalette: { showingCommandPalette = true },
-                onSettings: { showingSettings = true },
-                onDisconnect: { Task { await disconnect() } },
-                onReconnect: { Task { await connect() } }
-            )
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                // Unified status bar
+                TerminalStatusBar(
+                    workspace: workspace,
+                    sessionState: sessionState,
+                    voiceManager: voiceManager,
+                    onCommandPalette: { showingCommandPalette = true },
+                    onSettings: { showingSettings = true },
+                    onDisconnect: { Task { await disconnect() } },
+                    onReconnect: { Task { await connect() } },
+                    onVoiceText: { text in
+                        // Send voice-transcribed text to terminal
+                        Task {
+                            if let session = session {
+                                let data = Data(text.utf8)
+                                try? await session.transport.send(data)
+                            }
+                        }
+                    }
+                )
 
-            // Terminal view
-            TerminalContainerView(session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Terminal view
+                TerminalContainerView(session: session)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Voice transcript HUD - floating above status bar
+            VoiceTranscriptHUD(voiceManager: voiceManager) {
+                voiceManager.cancelRecording()
+            }
+            .padding(.bottom, 56) // Above status bar height
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: voiceManager.state)
         }
         .background(Color.machineBlack)
         .sheet(isPresented: $showingSettings) {
@@ -88,10 +108,49 @@ struct TerminalWorkspaceView: View {
             self.session = newSession
             try await sessionManager.connect(newSession)
             sessionState = .connected
+
+            // Execute startup command based on profile configuration
+            await executeStartupCommand(session: newSession)
         } catch {
             sessionState = .error(error)
             self.connectionError = error
         }
+    }
+
+    private func executeStartupCommand(session: TerminalSession) async {
+        let profile = workspace.serverProfile
+
+        // Only execute if multiplexer is configured
+        guard profile.multiplexer != .none else { return }
+
+        // Get the startup command based on behavior
+        let sessionName = expandSessionTemplate(profile.sessionTemplate, profile: profile)
+        guard let command = profile.startupBehavior.command(
+            for: profile.multiplexer,
+            sessionName: sessionName
+        ) else { return }
+
+        print("[Terminal] Executing startup command: \(command)")
+
+        // Small delay to let shell initialize
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+        // Send command with newline
+        let commandData = Data((command + "\n").utf8)
+        try? await session.transport.send(commandData)
+    }
+
+    private func expandSessionTemplate(_ template: String, profile: ServerProfile) -> String {
+        var result = template
+
+        // Expand template variables
+        result = result.replacingOccurrences(of: "{user}", with: profile.username)
+        result = result.replacingOccurrences(of: "{host}", with: profile.hostname.split(separator: ".").first.map(String.init) ?? profile.hostname)
+        result = result.replacingOccurrences(of: "{project}", with: "willo")
+        result = result.replacingOccurrences(of: "{env}", with: "dev")
+        result = result.replacingOccurrences(of: "{role}", with: "terminal")
+
+        return result
     }
 
     private func disconnect() async {
@@ -128,10 +187,12 @@ struct TerminalWorkspaceView: View {
 struct TerminalStatusBar: View {
     let workspace: Workspace
     let sessionState: SessionState
+    @ObservedObject var voiceManager: VoiceInputManager
     let onCommandPalette: () -> Void
     let onSettings: () -> Void
     let onDisconnect: () -> Void
     let onReconnect: () -> Void
+    let onVoiceText: (String) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -164,6 +225,14 @@ struct TerminalStatusBar: View {
 
             // Action buttons
             HStack(spacing: 6) {
+                // Voice input (only when connected)
+                if sessionState == .connected {
+                    VoiceInputButton(voiceManager: voiceManager) { text in
+                        onVoiceText(text)
+                    }
+                    .help("Voice Input")
+                }
+
                 // Command palette (only when connected)
                 if sessionState == .connected {
                     IndustrialIconButton(icon: "command", isActive: false, activeColor: .terminalCyan) {
