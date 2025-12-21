@@ -1,0 +1,342 @@
+import SwiftUI
+
+/// Compact session tab bar for switching between sessions
+struct SessionTabBar: View {
+    @EnvironmentObject var sessionStore: SessionStore
+    let onAddSession: () -> Void
+
+    @Namespace private var tabNamespace
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Session tabs
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(sessionStore.sessions) { session in
+                        SessionTab(
+                            session: session,
+                            isActive: session.id == sessionStore.activeSessionId,
+                            namespace: tabNamespace
+                        ) {
+                            sessionStore.setActiveSession(session.id)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+
+            // Add session button
+            Button(action: onAddSession) {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(width: 32, height: 32)
+                    .background {
+                        Circle()
+                            .fill(Color.machineGray)
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(Color.bezelLight.opacity(0.3), lineWidth: 1)
+                            }
+                    }
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 12)
+        }
+        .background {
+            Rectangle()
+                .fill(Color.machineBlack)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Color.bezelLight.opacity(0.15))
+                        .frame(height: 1)
+                }
+        }
+    }
+}
+
+// MARK: - Session Tab
+
+struct SessionTab: View {
+    let session: WilloSession
+    let isActive: Bool
+    let namespace: Namespace.ID
+    let onTap: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                // Activity indicator
+                SessionActivityIndicator(state: session.activityState, color: session.color)
+
+                // Session name
+                Text(session.displayTitle)
+                    .font(.willoMono(.caption, weight: isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? Color.textPrimary : Color.textSecondary)
+                    .lineLimit(1)
+
+                // Unread badge
+                if session.activityState.hasUnread {
+                    UnreadBadge(count: session.activityState.unreadCount)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background {
+                if isActive {
+                    // Active tab background with color accent
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.machineGray)
+                        .overlay(alignment: .bottom) {
+                            // Color accent bar
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(session.color.color)
+                                .frame(height: 2)
+                                .padding(.horizontal, 4)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(session.color.color.opacity(0.3), lineWidth: 1)
+                        }
+                        .matchedGeometryEffect(id: "activeTab", in: namespace)
+                } else {
+                    // Inactive tab - subtle background on press
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isPressed ? Color.machineGray.opacity(0.5) : Color.clear)
+                }
+            }
+            .scaleEffect(isPressed ? 0.95 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isActive)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
+    }
+}
+
+// MARK: - Session Activity Indicator
+
+struct SessionActivityIndicator: View {
+    let state: ActivityState
+    let color: SessionColor
+
+    @State private var isAnimating = false
+
+    var body: some View {
+        ZStack {
+            // Base circle with session color
+            Circle()
+                .fill(indicatorColor.opacity(0.3))
+                .frame(width: 8, height: 8)
+
+            // Inner dot
+            Circle()
+                .fill(indicatorColor)
+                .frame(width: 6, height: 6)
+
+            // Pulse animation for running state
+            if case .running = state {
+                Circle()
+                    .stroke(indicatorColor, lineWidth: 1)
+                    .frame(width: 12, height: 12)
+                    .scaleEffect(isAnimating ? 1.5 : 1.0)
+                    .opacity(isAnimating ? 0 : 0.5)
+            }
+        }
+        .onAppear {
+            if case .running = state {
+                withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) {
+                    isAnimating = true
+                }
+            }
+        }
+        .onChange(of: state) { _, newState in
+            if case .running = newState {
+                withAnimation(.easeOut(duration: 1).repeatForever(autoreverses: false)) {
+                    isAnimating = true
+                }
+            } else {
+                isAnimating = false
+            }
+        }
+    }
+
+    private var indicatorColor: Color {
+        switch state {
+        case .idle:
+            return Color.textTertiary
+        case .active:
+            return color.color
+        case .hasOutput:
+            return .terminalCyan
+        case .running:
+            return .terminalAmber
+        case .error:
+            return .terminalRed
+        }
+    }
+}
+
+// MARK: - Unread Badge
+
+struct UnreadBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background {
+                Capsule()
+                    .fill(Color.terminalRed)
+            }
+    }
+}
+
+// MARK: - Compact Session Tab Bar (Phone)
+
+/// Compact tab bar for phone - shows only icons with color indicators
+struct CompactSessionTabBar: View {
+    @EnvironmentObject var sessionStore: SessionStore
+    let onAddSession: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Session dots
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(sessionStore.sessions) { session in
+                        CompactSessionDot(
+                            session: session,
+                            isActive: session.id == sessionStore.activeSessionId
+                        ) {
+                            sessionStore.setActiveSession(session.id)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+
+            Spacer()
+
+            // Add button
+            Button(action: onAddSession) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 16)
+        }
+        .background(Color.machineBlack)
+    }
+}
+
+struct CompactSessionDot: View {
+    let session: WilloSession
+    let isActive: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                // Outer ring when active
+                if isActive {
+                    Circle()
+                        .stroke(session.color.color, lineWidth: 2)
+                        .frame(width: 24, height: 24)
+                }
+
+                // Main dot
+                Circle()
+                    .fill(session.color.color)
+                    .frame(width: 16, height: 16)
+
+                // Activity overlay
+                if session.activityState.hasUnread {
+                    Circle()
+                        .fill(Color.terminalRed)
+                        .frame(width: 8, height: 8)
+                        .offset(x: 8, y: -8)
+                }
+
+                if case .running = session.activityState {
+                    Circle()
+                        .stroke(Color.terminalAmber, lineWidth: 1.5)
+                        .frame(width: 20, height: 20)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Previews
+
+#Preview("Session Tab Bar") {
+    SessionTabBarPreview()
+}
+
+#Preview("Compact Tab Bar") {
+    CompactSessionTabBarPreview()
+}
+
+@MainActor
+private struct SessionTabBarPreview: View {
+    @StateObject private var store = SessionStore()
+
+    var body: some View {
+        VStack {
+            SessionTabBar { }
+                .environmentObject(store)
+            Spacer()
+        }
+        .background(Color.machineBlack)
+        .onAppear {
+            setupPreviewSessions()
+        }
+    }
+
+    private func setupPreviewSessions() {
+        let profile = ServerProfile(
+            displayName: "Devbox",
+            hostname: "devbox.local",
+            username: "dev"
+        )
+        store.createSession(profile: profile, name: "dev-work", color: .cyan)
+        store.createSession(profile: profile, name: "monitoring", color: .amber)
+        store.createSession(profile: profile, name: "deploy", color: .green)
+    }
+}
+
+@MainActor
+private struct CompactSessionTabBarPreview: View {
+    @StateObject private var store = SessionStore()
+
+    var body: some View {
+        VStack {
+            CompactSessionTabBar { }
+                .environmentObject(store)
+            Spacer()
+        }
+        .background(Color.machineBlack)
+        .onAppear {
+            let profile = ServerProfile(
+                displayName: "Devbox",
+                hostname: "devbox.local",
+                username: "dev"
+            )
+            store.createSession(profile: profile, name: "dev-work", color: .cyan)
+            store.createSession(profile: profile, name: "monitoring", color: .amber)
+        }
+    }
+}

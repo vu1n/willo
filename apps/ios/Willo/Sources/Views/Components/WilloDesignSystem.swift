@@ -13,6 +13,7 @@ extension Color {
     static let terminalRed = Color(red: 0.95, green: 0.3, blue: 0.3)
     static let terminalCyan = Color(red: 0.3, green: 0.85, blue: 0.9)
     static let terminalBlue = Color(red: 0.4, green: 0.6, blue: 0.95)
+    static let terminalMagenta = Color(red: 0.85, green: 0.4, blue: 0.75)
 
     // Surface colors (machined metal)
     static let machineBlack = Color(red: 0.06, green: 0.06, blue: 0.08)

@@ -10,10 +10,12 @@ final class AppServices: ObservableObject {
     let appState = AppState()
     let appearanceSettings = AppearanceSettings()
     let sessionManager: SessionManager
+    let sessionStore: SessionStore
 
     private init() {
         let appManager = GhosttyAppManager()
         self.sessionManager = SessionManager(appManager: appManager)
+        self.sessionStore = SessionStore(sessionManager: sessionManager)
     }
 }
 
@@ -29,6 +31,7 @@ public struct WilloApp: App {
                 .environmentObject(AppServices.shared.appState)
                 .environmentObject(AppServices.shared.appearanceSettings)
                 .environmentObject(AppServices.shared.sessionManager)
+                .environmentObject(AppServices.shared.sessionStore)
         }
     }
 }

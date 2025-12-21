@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var sessionStore: SessionStore
     @State private var showingProfiles = false
 
     #if DEBUG
@@ -25,17 +26,23 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        NavigationSplitView {
-            WorkspaceSidebar()
-        } detail: {
-            if let workspace = appState.activeWorkspace {
-                TerminalWorkspaceView(workspace: workspace)
-            } else {
-                WelcomeView(showingProfiles: $showingProfiles)
+        if sessionStore.sessions.isEmpty {
+            // No sessions - show welcome/workspace sidebar view
+            NavigationSplitView {
+                WorkspaceSidebar()
+            } detail: {
+                if let workspace = appState.activeWorkspace {
+                    TerminalWorkspaceView(workspace: workspace)
+                } else {
+                    WelcomeView(showingProfiles: $showingProfiles)
+                }
             }
-        }
-        .sheet(isPresented: $showingProfiles) {
-            ServerProfilesView()
+            .sheet(isPresented: $showingProfiles) {
+                ServerProfilesView()
+            }
+        } else {
+            // Has sessions - show session container with tab bar
+            SessionContainerView()
         }
     }
 }
@@ -43,4 +50,5 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(AppState())
+        .environmentObject(SessionStore())
 }
