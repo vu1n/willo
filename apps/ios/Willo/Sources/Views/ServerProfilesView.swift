@@ -261,147 +261,10 @@ struct ProfileEditorView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Connection section
-                    EditorSection(title: "Connection", icon: "network") {
-                        VStack(spacing: 12) {
-                            EditorField(label: "Display Name", text: $profile.displayName, placeholder: "My Server")
-
-                            EditorField(label: "Hostname", text: $profile.hostname, placeholder: "server.example.com")
-                                #if os(iOS)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.URL)
-                                #endif
-
-                            HStack(spacing: 12) {
-                                EditorField(label: "Username", text: $profile.username, placeholder: "user")
-                                    #if os(iOS)
-                                    .textInputAutocapitalization(.never)
-                                    #endif
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("PORT")
-                                        .font(.willoSectionHeader)
-                                        .foregroundStyle(Color.textTertiary)
-
-                                    TextField("22", value: $profile.port, format: .number)
-                                        .font(.willoMono(.body))
-                                        .foregroundStyle(Color.textPrimary)
-                                        #if os(iOS)
-                                        .keyboardType(.numberPad)
-                                        #endif
-                                        .padding(12)
-                                        .recessedPanel()
-                                        .frame(width: 80)
-                                }
-                            }
-                        }
-                    }
-
-                    // Authentication section
-                    EditorSection(title: "Authentication", icon: "key") {
-                        VStack(spacing: 12) {
-                            // Auth method picker
-                            HStack(spacing: 8) {
-                                AuthMethodButton(title: "SSH Key", icon: "key.fill", isSelected: authMethodType == 0) {
-                                    profile.authMethod = .key(keyId: nil)
-                                }
-                                AuthMethodButton(title: "Password", icon: "lock.fill", isSelected: authMethodType == 1) {
-                                    profile.authMethod = .password(password)
-                                }
-                                AuthMethodButton(title: "Agent", icon: "person.fill", isSelected: authMethodType == 2) {
-                                    profile.authMethod = .agent
-                                }
-                            }
-
-                            // Password field when selected
-                            if profile.authMethod.isPassword {
-                                SecureField("Password", text: $password)
-                                    .font(.willoMono(.body))
-                                    .foregroundStyle(Color.textPrimary)
-                                    #if os(iOS)
-                                    .textInputAutocapitalization(.never)
-                                    #endif
-                                    .autocorrectionDisabled()
-                                    .padding(12)
-                                    .recessedPanel()
-                            }
-                        }
-                    }
-
-                    // Connection type section
-                    EditorSection(title: "Connection Type", icon: "bolt") {
-                        VStack(spacing: 12) {
-                            Toggle(isOn: $profile.preferMosh) {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "bolt.fill")
-                                        .foregroundStyle(profile.preferMosh ? Color.terminalAmber : Color.textTertiary)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Use Mosh")
-                                            .font(.willoMono(.body, weight: .medium))
-                                            .foregroundStyle(Color.textPrimary)
-                                        Text("Better for high-latency connections")
-                                            .font(.willoCaption)
-                                            .foregroundStyle(Color.textTertiary)
-                                    }
-                                }
-                            }
-                            .tint(.terminalAmber)
-                        }
-                    }
-
-                    // Session section
-                    EditorSection(title: "Session", icon: "terminal") {
-                        VStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("MULTIPLEXER")
-                                    .font(.willoSectionHeader)
-                                    .foregroundStyle(Color.textTertiary)
-
-                                HStack(spacing: 8) {
-                                    ForEach(MultiplexerPreference.allCases, id: \.self) { pref in
-                                        MultiplexerButton(
-                                            preference: pref,
-                                            isSelected: profile.multiplexer == pref
-                                        ) {
-                                            profile.multiplexer = pref
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Startup behavior (only shown when multiplexer is not none)
-                            if profile.multiplexer != .none {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("ON CONNECT")
-                                        .font(.willoSectionHeader)
-                                        .foregroundStyle(Color.textTertiary)
-
-                                    HStack(spacing: 8) {
-                                        ForEach(StartupBehavior.allCases, id: \.self) { behavior in
-                                            StartupBehaviorButton(
-                                                behavior: behavior,
-                                                isSelected: profile.startupBehavior == behavior
-                                            ) {
-                                                profile.startupBehavior = behavior
-                                            }
-                                        }
-                                    }
-
-                                    Text(profile.startupBehavior.description)
-                                        .font(.willoCaption)
-                                        .foregroundStyle(Color.textTertiary)
-                                }
-                            }
-
-                            // Session template (only shown when using new session)
-                            if profile.multiplexer != .none && profile.startupBehavior == .newSession {
-                                EditorField(label: "Session Template", text: $profile.sessionTemplate, placeholder: "willo/{user}/{host}")
-                                    #if os(iOS)
-                                    .textInputAutocapitalization(.never)
-                                    #endif
-                            }
-                        }
-                    }
+                    connectionSection
+                    authenticationSection
+                    connectionTypeSection
+                    sessionSection
                 }
                 .padding(20)
             }
@@ -430,6 +293,154 @@ struct ProfileEditorView: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    // MARK: - Section Views
+
+    private var connectionSection: some View {
+        EditorSection(title: "Connection", icon: "network") {
+            VStack(spacing: 12) {
+                EditorField(label: "Display Name", text: $profile.displayName, placeholder: "My Server")
+
+                EditorField(label: "Hostname", text: $profile.hostname, placeholder: "server.example.com")
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+
+                HStack(spacing: 12) {
+                    EditorField(label: "Username", text: $profile.username, placeholder: "user")
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+
+                    portField
+                }
+            }
+        }
+    }
+
+    private var portField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("PORT")
+                .font(.willoSectionHeader)
+                .foregroundStyle(Color.textTertiary)
+
+            TextField("22", value: $profile.port, format: .number)
+                .font(.willoMono(.body))
+                .foregroundStyle(Color.textPrimary)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+                .padding(12)
+                .recessedPanel()
+                .frame(width: 80)
+        }
+    }
+
+    private var authenticationSection: some View {
+        EditorSection(title: "Authentication", icon: "key") {
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    AuthMethodButton(title: "SSH Key", icon: "key.fill", isSelected: authMethodType == 0) {
+                        profile.authMethod = .key(keyId: nil)
+                    }
+                    AuthMethodButton(title: "Password", icon: "lock.fill", isSelected: authMethodType == 1) {
+                        profile.authMethod = .password(password)
+                    }
+                    AuthMethodButton(title: "Agent", icon: "person.fill", isSelected: authMethodType == 2) {
+                        profile.authMethod = .agent
+                    }
+                }
+
+                if profile.authMethod.isPassword {
+                    SecureField("Password", text: $password)
+                        .font(.willoMono(.body))
+                        .foregroundStyle(Color.textPrimary)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                        .autocorrectionDisabled()
+                        .padding(12)
+                        .recessedPanel()
+                }
+            }
+        }
+    }
+
+    private var connectionTypeSection: some View {
+        EditorSection(title: "Connection Type", icon: "bolt") {
+            VStack(spacing: 12) {
+                Toggle(isOn: $profile.preferMosh) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bolt.fill")
+                            .foregroundStyle(profile.preferMosh ? Color.terminalAmber : Color.textTertiary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Use Mosh")
+                                .font(.willoMono(.body, weight: .medium))
+                                .foregroundStyle(Color.textPrimary)
+                            Text("Better for high-latency connections")
+                                .font(.willoCaption)
+                                .foregroundStyle(Color.textTertiary)
+                        }
+                    }
+                }
+                .tint(.terminalAmber)
+            }
+        }
+    }
+
+    private var sessionSection: some View {
+        EditorSection(title: "Session", icon: "terminal") {
+            VStack(spacing: 12) {
+                multiplexerPicker
+                if profile.multiplexer != .none {
+                    startupBehaviorPicker
+                }
+            }
+        }
+    }
+
+    private var multiplexerPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("MULTIPLEXER")
+                .font(.willoSectionHeader)
+                .foregroundStyle(Color.textTertiary)
+
+            HStack(spacing: 8) {
+                ForEach(MultiplexerPreference.allCases, id: \.self) { pref in
+                    MultiplexerButton(
+                        preference: pref,
+                        isSelected: profile.multiplexer == pref
+                    ) {
+                        profile.multiplexer = pref
+                    }
+                }
+            }
+        }
+    }
+
+    private var startupBehaviorPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("ON CONNECT")
+                .font(.willoSectionHeader)
+                .foregroundStyle(Color.textTertiary)
+
+            HStack(spacing: 8) {
+                ForEach(StartupBehavior.allCases, id: \.self) { behavior in
+                    StartupBehaviorButton(
+                        behavior: behavior,
+                        isSelected: profile.startupBehavior == behavior
+                    ) {
+                        profile.startupBehavior = behavior
+                    }
+                }
+            }
+
+            Text(profile.startupBehavior.description)
+                .font(.willoCaption)
+                .foregroundStyle(Color.textTertiary)
+        }
     }
 
     private var canSave: Bool {

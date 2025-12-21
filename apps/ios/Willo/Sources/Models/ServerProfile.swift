@@ -21,7 +21,7 @@ struct ServerProfile: Identifiable, Codable, Equatable, Hashable {
         username: String,
         authMethod: AuthMethod = .key(keyId: nil),
         multiplexer: MultiplexerPreference = .zellij,
-        startupBehavior: StartupBehavior = .newSession,
+        startupBehavior: StartupBehavior = .namedSession,
         sessionTemplate: String = "{project}/{env}/{role}/{host}",
         preferMosh: Bool = true,
         lastConnected: Date? = nil
@@ -90,44 +90,49 @@ enum MultiplexerPreference: String, Codable, CaseIterable {
 /// What to do after SSH/Mosh connection is established
 enum StartupBehavior: String, Codable, CaseIterable {
     case bareShell      // Just connect, no multiplexer
-    case attachLast     // Attach to most recent session (zellij attach / tmux attach)
-    case newSession     // Create new session with name from template
+    case attachLast     // Attach to most recent session, or create if none
+    case namedSession   // Create/attach to session matching Willo tab name
 
     var displayName: String {
         switch self {
         case .bareShell: return "Bare Shell"
-        case .attachLast: return "Attach Last"
-        case .newSession: return "New Session"
+        case .attachLast: return "Attach/Create"
+        case .namedSession: return "Named Session"
         }
     }
 
     var description: String {
         switch self {
         case .bareShell: return "Just connect, no multiplexer"
-        case .attachLast: return "Attach to most recent session"
-        case .newSession: return "Create new session with name"
+        case .attachLast: return "Attach to existing or create new"
+        case .namedSession: return "Session name matches tab label"
         }
     }
 
     /// Returns the shell command to execute for the given multiplexer
     /// - Parameters:
     ///   - multiplexer: The multiplexer preference
-    ///   - sessionName: Optional session name for new sessions
-    func command(for multiplexer: MultiplexerPreference, sessionName: String?) -> String? {
+    ///   - sessionName: Session name for namedSession behavior (matches Willo tab)
+    func command(for multiplexer: MultiplexerPreference, sessionName: String? = nil) -> String? {
         switch self {
         case .bareShell:
             return nil
         case .attachLast:
             switch multiplexer {
-            // Attach to last session, or create default if none exists
+            // Attach to last session, or create if none exists
+            // If multiple sessions exist, zellij will prompt user to pick
             case .zellij: return "zellij attach || zellij"
-            case .tmux: return "tmux attach || tmux"
+            case .tmux: return "tmux attach || tmux new-session"
             case .none: return nil
             }
-        case .newSession:
-            guard let name = sessionName else { return nil }
+        case .namedSession:
+            guard let name = sessionName, !name.isEmpty else {
+                // Fallback to attachLast if no name provided
+                return command(for: multiplexer, sessionName: nil)
+            }
             switch multiplexer {
-            // -c creates session if it doesn't exist, attaches if it does
+            // Create or attach to session with specific name
+            // -c flag creates if doesn't exist, attaches if it does
             case .zellij: return "zellij attach -c \"\(name)\""
             case .tmux: return "tmux new-session -A -s \"\(name)\""
             case .none: return nil

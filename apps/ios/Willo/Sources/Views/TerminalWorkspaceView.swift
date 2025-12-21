@@ -4,6 +4,7 @@ struct TerminalWorkspaceView: View {
     let workspace: Workspace
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionManager: SessionManager
+    @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var appearanceSettings: AppearanceSettings
     @State private var session: TerminalSession?
     @State private var sessionState: SessionState = .disconnected
@@ -82,6 +83,18 @@ struct TerminalWorkspaceView: View {
     }
 
     private func connect() async {
+        // Check for cached terminal session first (kept alive from tab switching)
+        if let cachedSession = sessionStore.getTerminalSession(for: workspace.id) {
+            print("[Terminal] Reusing cached session for workspace \(workspace.id)")
+            self.session = cachedSession
+            sessionState = .connected
+
+            // Send resize in case screen size changed
+            let terminalSize = calculateTerminalSize()
+            try? await cachedSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
+            return
+        }
+
         sessionState = .connecting
         do {
             let terminalSize = calculateTerminalSize()
@@ -109,6 +122,10 @@ struct TerminalWorkspaceView: View {
             try await sessionManager.connect(newSession)
             sessionState = .connected
 
+            // Cache the session for tab switching
+            sessionStore.setTerminalSession(newSession, for: workspace.id)
+            print("[Terminal] Cached session for workspace \(workspace.id)")
+
             // Execute startup command based on profile configuration
             await executeStartupCommand(session: newSession)
 
@@ -129,12 +146,27 @@ struct TerminalWorkspaceView: View {
         // Only execute if multiplexer is configured
         guard profile.multiplexer != .none else { return }
 
-        // Get the startup command based on behavior
-        let sessionName = expandSessionTemplate(profile.sessionTemplate, profile: profile)
-        guard let command = profile.startupBehavior.command(
-            for: profile.multiplexer,
-            sessionName: sessionName
-        ) else { return }
+        // Determine the command based on session name and profile behavior
+        // If we have a session name, always use it (namedSession behavior)
+        // This ensures the zellij session matches the Willo tab name
+        let command: String?
+        let sessionName = workspace.sessionName
+
+        if !sessionName.isEmpty {
+            // We have a session name - use namedSession behavior to create/attach with that name
+            command = StartupBehavior.namedSession.command(
+                for: profile.multiplexer,
+                sessionName: sessionName
+            )
+        } else {
+            // No session name - fall back to profile's startup behavior
+            command = profile.startupBehavior.command(
+                for: profile.multiplexer,
+                sessionName: nil
+            )
+        }
+
+        guard let command = command else { return }
 
         print("[Terminal] Executing startup command: \(command)")
 
@@ -146,33 +178,26 @@ struct TerminalWorkspaceView: View {
         try? await session.transport.send(commandData)
     }
 
-    private func expandSessionTemplate(_ template: String, profile: ServerProfile) -> String {
-        var result = template
-
-        // Expand template variables
-        result = result.replacingOccurrences(of: "{user}", with: profile.username)
-        result = result.replacingOccurrences(of: "{host}", with: profile.hostname.split(separator: ".").first.map(String.init) ?? profile.hostname)
-        result = result.replacingOccurrences(of: "{project}", with: "willo")
-        result = result.replacingOccurrences(of: "{env}", with: "dev")
-        result = result.replacingOccurrences(of: "{role}", with: "terminal")
-
-        return result
-    }
-
     private func disconnect() async {
         guard let session = session else { return }
+
+        // Remove from cache since user explicitly disconnected
+        sessionStore.removeTerminalSession(for: workspace.id)
+        print("[Terminal] Removed cached session for workspace \(workspace.id)")
+
         try? await sessionManager.disconnect(session)
         self.session = nil
         sessionState = .disconnected
     }
 
     private func calculateTerminalSize() -> (cols: UInt16, rows: UInt16) {
-        // Cell dimensions should match WilloTerminalView's calculation
-        // WilloTerminalView uses: cellWidth = ceil(fontSize * 0.6), cellHeight = ceil(fontSize * 1.2)
-        // With default fontSize ~20, this gives approximately 12x24
-        let fontSize: CGFloat = 20.0
-        let cellWidth: CGFloat = ceil(fontSize * 0.6)  // ~12
-        let cellHeight: CGFloat = ceil(fontSize * 1.2) // ~24
+        // Cell dimensions must match GlyphAtlas calculation (based on actual font metrics)
+        // GlyphAtlas uses CoreText to get exact glyph dimensions
+        // For a rough estimate: cellWidth ≈ fontSize * 0.6, cellHeight ≈ fontSize * 1.35
+        // Use appearanceSettings.fontSize to match the actual renderer
+        let fontSize = appearanceSettings.fontSize
+        let cellWidth: CGFloat = ceil(fontSize * 0.6)
+        let cellHeight: CGFloat = ceil(fontSize * 1.35)
 
         var availableSize = CGSize(width: 800, height: 600)
 
@@ -190,7 +215,7 @@ struct TerminalWorkspaceView: View {
         let cols = max(40, min(300, UInt16(availableSize.width / cellWidth)))
         let rows = max(10, min(100, UInt16(availableSize.height / cellHeight)))
 
-        print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), available: \(availableSize))")
+        print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), fontSize: \(fontSize), available: \(availableSize))")
         return (cols, rows)
     }
 }
@@ -469,6 +494,7 @@ extension ServerProfile {
     )
     .environmentObject(AppState())
     .environmentObject(SessionManager(appManager: GhosttyAppManager()))
+    .environmentObject(SessionStore())
     .environmentObject(AppearanceSettings())
     .preferredColorScheme(.dark)
 }

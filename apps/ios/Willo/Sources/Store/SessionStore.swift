@@ -19,6 +19,12 @@ final class SessionStore: ObservableObject {
     /// Currently active session ID
     @Published var activeSessionId: UUID?
 
+    // MARK: - Active Terminal Sessions
+
+    /// Cache of active terminal sessions (kept alive when switching tabs)
+    /// Key: WilloSession.id, Value: TerminalSession
+    private var activeTerminalSessions: [UUID: TerminalSession] = [:]
+
     // MARK: - Dependencies
 
     private weak var sessionManager: SessionManager?
@@ -34,6 +40,28 @@ final class SessionStore: ObservableObject {
     init(sessionManager: SessionManager? = nil) {
         self.sessionManager = sessionManager
         loadSessions()
+    }
+
+    // MARK: - Terminal Session Management
+
+    /// Get cached terminal session for a WilloSession
+    func getTerminalSession(for sessionId: UUID) -> TerminalSession? {
+        return activeTerminalSessions[sessionId]
+    }
+
+    /// Cache a terminal session
+    func setTerminalSession(_ terminalSession: TerminalSession, for sessionId: UUID) {
+        activeTerminalSessions[sessionId] = terminalSession
+    }
+
+    /// Remove cached terminal session (on close)
+    func removeTerminalSession(for sessionId: UUID) {
+        activeTerminalSessions.removeValue(forKey: sessionId)
+    }
+
+    /// Check if a terminal session is active
+    func hasActiveTerminalSession(for sessionId: UUID) -> Bool {
+        return activeTerminalSessions[sessionId] != nil
     }
 
     // MARK: - Computed Properties
@@ -165,6 +193,14 @@ final class SessionStore: ObservableObject {
 
     /// Close and remove a session
     func closeSession(_ sessionId: UUID) {
+        // Disconnect terminal session if active
+        if let terminalSession = activeTerminalSessions[sessionId] {
+            Task {
+                try? await sessionManager?.disconnect(terminalSession)
+            }
+            activeTerminalSessions.removeValue(forKey: sessionId)
+        }
+
         sessions.removeAll { $0.id == sessionId }
 
         // Update active session if needed

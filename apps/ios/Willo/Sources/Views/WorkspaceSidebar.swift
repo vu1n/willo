@@ -197,6 +197,9 @@ struct NewWorkspaceView: View {
     @State private var sessionName = ""
     @State private var selectedColor: SessionColor = .cyan
 
+    /// Key for storing last selected profile
+    private static let lastProfileKey = "lastSelectedProfileId"
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -224,10 +227,7 @@ struct NewWorkspaceView: View {
                                             profile: profile,
                                             isSelected: selectedProfile?.id == profile.id
                                         ) {
-                                            selectedProfile = profile
-                                            if sessionName.isEmpty {
-                                                sessionName = generateSessionName(for: profile)
-                                            }
+                                            selectProfile(profile)
                                         }
                                     }
                                 }
@@ -239,7 +239,7 @@ struct NewWorkspaceView: View {
                             IndustrialSectionHeader(title: "Session", icon: "terminal")
 
                             VStack(alignment: .leading, spacing: 8) {
-                                TextField("Session name", text: $sessionName)
+                                TextField("Session name (optional)", text: $sessionName)
                                     .font(.willoMono(.body))
                                     .foregroundStyle(Color.textPrimary)
                                     #if os(iOS)
@@ -249,7 +249,7 @@ struct NewWorkspaceView: View {
                                     .padding(12)
                                     .recessedPanel()
 
-                                Text("Used by zellij to identify your workspace")
+                                Text("Name for both Willo tab and zellij session")
                                     .font(.willoCaption)
                                     .foregroundStyle(Color.textTertiary)
                             }
@@ -302,7 +302,7 @@ struct NewWorkspaceView: View {
                         ) {
                             createWorkspace()
                         }
-                        .disabled(selectedProfile == nil || sessionName.isEmpty)
+                        .disabled(selectedProfile == nil)
                     }
                     .padding(16)
                 }
@@ -315,17 +315,45 @@ struct NewWorkspaceView: View {
             .toolbarBackground(Color.machineGray, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             #endif
+            .onAppear {
+                autoSelectProfile()
+            }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func autoSelectProfile() {
+        // Try to select last used profile
+        if let lastIdString = UserDefaults.standard.string(forKey: Self.lastProfileKey),
+           let lastId = UUID(uuidString: lastIdString),
+           let profile = appState.serverProfiles.first(where: { $0.id == lastId }) {
+            selectedProfile = profile
+        }
+        // Otherwise select first profile if only one exists
+        else if appState.serverProfiles.count == 1 {
+            selectedProfile = appState.serverProfiles.first
+        }
+    }
+
+    private func selectProfile(_ profile: ServerProfile) {
+        selectedProfile = profile
+        // Save as last selected
+        UserDefaults.standard.set(profile.id.uuidString, forKey: Self.lastProfileKey)
     }
 
     private func createWorkspace() {
         guard let profile = selectedProfile else { return }
 
+        // Use provided name or generate zellij-style random name
+        let finalName = sessionName.isEmpty ? generateZellijStyleName() : sessionName
+
+        // Save last selected profile
+        UserDefaults.standard.set(profile.id.uuidString, forKey: Self.lastProfileKey)
+
         // Create WilloSession (new session-based architecture)
         let session = sessionStore.createSession(
             profile: profile,
-            name: sessionName,
+            name: finalName,
             color: selectedColor
         )
 
@@ -333,7 +361,7 @@ struct NewWorkspaceView: View {
         let workspace = Workspace(
             id: session.id,  // Use same ID for linking
             serverProfile: profile,
-            sessionName: sessionName
+            sessionName: finalName
         )
 
         appState.workspaces.append(workspace)
@@ -341,22 +369,52 @@ struct NewWorkspaceView: View {
         dismiss()
     }
 
-    private func generateSessionName(for profile: ServerProfile) -> String {
-        let hostPart = profile.hostname.split(separator: ".").first ?? "server"
-        let baseName = "willo/\(profile.username)/\(hostPart)"
+    /// Generate a zellij-style session name (adjective-noun)
+    /// Ensures no collision with existing sessions
+    private func generateZellijStyleName() -> String {
+        let adjectives = [
+            "able", "aged", "ancient", "bold", "brave", "bright", "calm", "clean", "clever", "cool",
+            "damp", "dark", "dawn", "deep", "dry", "early", "easy", "empty", "fair", "fast",
+            "flat", "free", "fresh", "full", "gentle", "good", "great", "green", "happy", "heavy",
+            "hidden", "holy", "humble", "icy", "kind", "late", "light", "little", "lively", "lone",
+            "long", "lucky", "mild", "misty", "mute", "named", "narrow", "neat", "new", "nice",
+            "noble", "odd", "old", "orange", "pale", "patient", "plain", "polite", "proud", "purple",
+            "quick", "quiet", "rapid", "rare", "red", "restless", "rich", "rough", "round", "royal",
+            "rustic", "shy", "silent", "simple", "small", "smooth", "snowy", "soft", "solitary", "sparkling",
+            "spring", "still", "summer", "super", "sweet", "tender", "thirsty", "tiny", "tough", "twilight",
+            "wandering", "warm", "weathered", "white", "wild", "winter", "wispy", "young", "zealous"
+        ]
 
-        // Check for existing sessions with same base name and find next available number
-        let existingNames = sessionStore.sessions.map { $0.name }
-        if !existingNames.contains(baseName) {
-            return baseName
+        let nouns = [
+            "apple", "apricot", "badger", "bear", "bee", "bird", "breeze", "brook", "bush", "butterfly",
+            "cherry", "cloud", "coral", "crane", "dawn", "deer", "dew", "dream", "duck", "dust",
+            "eagle", "elm", "fern", "field", "finch", "fire", "flower", "fog", "forest", "fox",
+            "frog", "frost", "glade", "grass", "grove", "hare", "hawk", "hazel", "hill", "hound",
+            "lake", "leaf", "light", "lily", "lion", "maple", "meadow", "mist", "moon", "moss",
+            "moth", "mouse", "night", "oak", "ocean", "orchid", "otter", "owl", "palm", "path",
+            "peak", "pebble", "pine", "pond", "rabbit", "rain", "raven", "reef", "river", "robin",
+            "rock", "rose", "sage", "sea", "shadow", "shore", "sky", "smoke", "snow", "sparrow",
+            "star", "stone", "storm", "stream", "sun", "swallow", "thunder", "tiger", "tree", "violet",
+            "water", "wave", "weasel", "willow", "wind", "wolf", "wood", "wren"
+        ]
+
+        let existingNames = Set(sessionStore.sessions.map { $0.name })
+
+        // Try to find a unique name (up to 100 attempts)
+        for _ in 0..<100 {
+            let adjective = adjectives.randomElement() ?? "wild"
+            let noun = nouns.randomElement() ?? "star"
+            let name = "\(adjective)-\(noun)"
+
+            if !existingNames.contains(name) {
+                return name
+            }
         }
 
-        // Find next available number
-        var counter = 2
-        while existingNames.contains("\(baseName)/\(counter)") {
-            counter += 1
-        }
-        return "\(baseName)/\(counter)"
+        // Fallback: append random number
+        let adjective = adjectives.randomElement() ?? "wild"
+        let noun = nouns.randomElement() ?? "star"
+        return "\(adjective)-\(noun)-\(Int.random(in: 100...999))"
     }
 }
 

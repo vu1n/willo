@@ -113,11 +113,11 @@ struct SessionTab: View {
         .padding(.vertical, 6)
         .background {
             if isActive {
-                // Active tab background with color accent
+                // Active tab: full color treatment
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.machineGray)
                     .overlay(alignment: .bottom) {
-                        // Color accent bar
+                        // Bold color accent bar
                         RoundedRectangle(cornerRadius: 1)
                             .fill(session.color.color)
                             .frame(height: 2)
@@ -125,13 +125,25 @@ struct SessionTab: View {
                     }
                     .overlay {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(session.color.color.opacity(0.3), lineWidth: 1)
+                            .strokeBorder(session.color.color.opacity(0.4), lineWidth: 1)
                     }
+                    .shadow(color: session.color.color.opacity(0.2), radius: 4, x: 0, y: 0)
                     .matchedGeometryEffect(id: "activeTab", in: namespace)
             } else {
-                // Inactive tab - subtle background on press
+                // Inactive tab: subtle color presence (LED dashboard style)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isPressed ? Color.machineGray.opacity(0.5) : Color.clear)
+                    .fill(isPressed ? Color.machineGray.opacity(0.5) : Color.machineGray.opacity(0.2))
+                    .overlay(alignment: .leading) {
+                        // Colored left edge indicator (like a status LED strip)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(session.color.color.opacity(0.5))
+                            .frame(width: 2)
+                            .padding(.vertical, 4)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(session.color.color.opacity(0.15), lineWidth: 1)
+                    }
             }
         }
         .scaleEffect(isPressed ? 0.95 : 1.0)
@@ -198,7 +210,8 @@ struct SessionActivityIndicator: View {
     private var indicatorColor: Color {
         switch state {
         case .idle:
-            return Color.textTertiary
+            // Use session color at reduced brightness for idle (not gray)
+            return color.color.opacity(0.6)
         case .active:
             return color.color
         case .hasOutput:
@@ -277,19 +290,25 @@ struct CompactSessionDot: View {
     var body: some View {
         Button(action: onTap) {
             ZStack {
-                // Outer ring when active
-                if isActive {
-                    Circle()
-                        .stroke(session.color.color, lineWidth: 2)
-                        .frame(width: 24, height: 24)
-                }
-
-                // Main dot
+                // Outer ring - always show but brighter when active
                 Circle()
-                    .fill(session.color.color)
+                    .stroke(session.color.color.opacity(isActive ? 1.0 : 0.3), lineWidth: isActive ? 2 : 1)
+                    .frame(width: 24, height: 24)
+
+                // Main dot - always show session color
+                Circle()
+                    .fill(session.color.color.opacity(isActive ? 1.0 : 0.5))
                     .frame(width: 16, height: 16)
 
-                // Activity overlay
+                // Inner glow when active
+                if isActive {
+                    Circle()
+                        .fill(session.color.color.opacity(0.3))
+                        .frame(width: 12, height: 12)
+                        .blur(radius: 2)
+                }
+
+                // Activity overlay - unread badge
                 if session.activityState.hasUnread {
                     Circle()
                         .fill(Color.terminalRed)
@@ -297,6 +316,7 @@ struct CompactSessionDot: View {
                         .offset(x: 8, y: -8)
                 }
 
+                // Running indicator
                 if case .running = session.activityState {
                     Circle()
                         .stroke(Color.terminalAmber, lineWidth: 1.5)
@@ -305,6 +325,7 @@ struct CompactSessionDot: View {
             }
         }
         .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: isActive)
     }
 }
 

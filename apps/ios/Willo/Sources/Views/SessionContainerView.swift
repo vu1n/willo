@@ -270,6 +270,9 @@ struct NewSessionSheet: View {
     @State private var sessionName = ""
     @State private var selectedColor: SessionColor = .cyan
 
+    /// Key for storing last selected profile
+    private static let lastProfileKey = "lastSelectedProfileId"
+
     var body: some View {
         NavigationStack {
             Form {
@@ -284,11 +287,7 @@ struct NewSessionSheet: View {
                                 profile: profile,
                                 isSelected: selectedProfileId == profile.id
                             ) {
-                                selectedProfileId = profile.id
-                                if sessionName.isEmpty {
-                                    // Auto-generate session name from template
-                                    sessionName = expandTemplate(profile.sessionTemplate, profile: profile)
-                                }
+                                selectProfile(profile)
                             }
                         }
                     }
@@ -296,8 +295,12 @@ struct NewSessionSheet: View {
 
                 // Session details
                 Section("Session") {
-                    TextField("Session Name", text: $sessionName)
+                    TextField("Session name (optional)", text: $sessionName)
                         .font(.willoMono(.body))
+
+                    Text("Name for both Willo tab and zellij session")
+                        .font(.willoCaption)
+                        .foregroundStyle(Color.textTertiary)
 
                     // Color picker
                     HStack {
@@ -336,21 +339,33 @@ struct NewSessionSheet: View {
                     Button("Create") {
                         createSession()
                     }
-                    .disabled(selectedProfileId == nil || sessionName.isEmpty)
+                    .disabled(selectedProfileId == nil)
                 }
+            }
+            .onAppear {
+                autoSelectProfile()
             }
         }
         .presentationDetents([.medium, .large])
     }
 
-    private func expandTemplate(_ template: String, profile: ServerProfile) -> String {
-        var result = template
-        result = result.replacingOccurrences(of: "{user}", with: profile.username)
-        result = result.replacingOccurrences(of: "{host}", with: profile.hostname.split(separator: ".").first.map(String.init) ?? profile.hostname)
-        result = result.replacingOccurrences(of: "{project}", with: "willo")
-        result = result.replacingOccurrences(of: "{env}", with: "dev")
-        result = result.replacingOccurrences(of: "{role}", with: "terminal")
-        return result
+    private func autoSelectProfile() {
+        // Try to select last used profile
+        if let lastIdString = UserDefaults.standard.string(forKey: Self.lastProfileKey),
+           let lastId = UUID(uuidString: lastIdString),
+           appState.serverProfiles.contains(where: { $0.id == lastId }) {
+            selectedProfileId = lastId
+        }
+        // Otherwise select first profile if only one exists
+        else if appState.serverProfiles.count == 1 {
+            selectedProfileId = appState.serverProfiles.first?.id
+        }
+    }
+
+    private func selectProfile(_ profile: ServerProfile) {
+        selectedProfileId = profile.id
+        // Save as last selected
+        UserDefaults.standard.set(profile.id.uuidString, forKey: Self.lastProfileKey)
     }
 
     private func createSession() {
@@ -359,12 +374,66 @@ struct NewSessionSheet: View {
             return
         }
 
+        // Use provided name or generate zellij-style random name
+        let finalName = sessionName.isEmpty ? generateZellijStyleName() : sessionName
+
+        // Save last selected profile
+        UserDefaults.standard.set(profileId.uuidString, forKey: Self.lastProfileKey)
+
         sessionStore.createSession(
             profile: profile,
-            name: sessionName,
+            name: finalName,
             color: selectedColor
         )
         dismiss()
+    }
+
+    /// Generate a zellij-style session name (adjective-noun)
+    /// Ensures no collision with existing sessions
+    private func generateZellijStyleName() -> String {
+        let adjectives = [
+            "able", "aged", "ancient", "bold", "brave", "bright", "calm", "clean", "clever", "cool",
+            "damp", "dark", "dawn", "deep", "dry", "early", "easy", "empty", "fair", "fast",
+            "flat", "free", "fresh", "full", "gentle", "good", "great", "green", "happy", "heavy",
+            "hidden", "holy", "humble", "icy", "kind", "late", "light", "little", "lively", "lone",
+            "long", "lucky", "mild", "misty", "mute", "named", "narrow", "neat", "new", "nice",
+            "noble", "odd", "old", "orange", "pale", "patient", "plain", "polite", "proud", "purple",
+            "quick", "quiet", "rapid", "rare", "red", "restless", "rich", "rough", "round", "royal",
+            "rustic", "shy", "silent", "simple", "small", "smooth", "snowy", "soft", "solitary", "sparkling",
+            "spring", "still", "summer", "super", "sweet", "tender", "thirsty", "tiny", "tough", "twilight",
+            "wandering", "warm", "weathered", "white", "wild", "winter", "wispy", "young", "zealous"
+        ]
+
+        let nouns = [
+            "apple", "apricot", "badger", "bear", "bee", "bird", "breeze", "brook", "bush", "butterfly",
+            "cherry", "cloud", "coral", "crane", "dawn", "deer", "dew", "dream", "duck", "dust",
+            "eagle", "elm", "fern", "field", "finch", "fire", "flower", "fog", "forest", "fox",
+            "frog", "frost", "glade", "grass", "grove", "hare", "hawk", "hazel", "hill", "hound",
+            "lake", "leaf", "light", "lily", "lion", "maple", "meadow", "mist", "moon", "moss",
+            "moth", "mouse", "night", "oak", "ocean", "orchid", "otter", "owl", "palm", "path",
+            "peak", "pebble", "pine", "pond", "rabbit", "rain", "raven", "reef", "river", "robin",
+            "rock", "rose", "sage", "sea", "shadow", "shore", "sky", "smoke", "snow", "sparrow",
+            "star", "stone", "storm", "stream", "sun", "swallow", "thunder", "tiger", "tree", "violet",
+            "water", "wave", "weasel", "willow", "wind", "wolf", "wood", "wren"
+        ]
+
+        let existingNames = Set(sessionStore.sessions.map { $0.name })
+
+        // Try to find a unique name (up to 100 attempts)
+        for _ in 0..<100 {
+            let adjective = adjectives.randomElement() ?? "wild"
+            let noun = nouns.randomElement() ?? "star"
+            let name = "\(adjective)-\(noun)"
+
+            if !existingNames.contains(name) {
+                return name
+            }
+        }
+
+        // Fallback: append random number
+        let adjective = adjectives.randomElement() ?? "wild"
+        let noun = nouns.randomElement() ?? "star"
+        return "\(adjective)-\(noun)-\(Int.random(in: 100...999))"
     }
 }
 
