@@ -111,6 +111,12 @@ struct TerminalWorkspaceView: View {
 
             // Execute startup command based on profile configuration
             await executeStartupCommand(session: newSession)
+
+            // Send resize after connection to ensure remote session has correct size
+            // This is especially important when reconnecting to existing zellij/tmux sessions
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for shell/multiplexer to initialize
+            try? await newSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
+            print("[Terminal] Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
         } catch {
             sessionState = .error(error)
             self.connectionError = error
@@ -161,23 +167,30 @@ struct TerminalWorkspaceView: View {
     }
 
     private func calculateTerminalSize() -> (cols: UInt16, rows: UInt16) {
-        let cellWidth: CGFloat = 15.0
-        let cellHeight: CGFloat = 28.0
+        // Cell dimensions should match WilloTerminalView's calculation
+        // WilloTerminalView uses: cellWidth = ceil(fontSize * 0.6), cellHeight = ceil(fontSize * 1.2)
+        // With default fontSize ~20, this gives approximately 12x24
+        let fontSize: CGFloat = 20.0
+        let cellWidth: CGFloat = ceil(fontSize * 0.6)  // ~12
+        let cellHeight: CGFloat = ceil(fontSize * 1.2) // ~24
+
         var availableSize = CGSize(width: 800, height: 600)
 
         #if os(iOS)
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
             let bounds = windowScene.coordinateSpace.bounds
+            // Account for status bar (56pt) and some padding
             availableSize = CGSize(
-                width: bounds.width - 20,
-                height: bounds.height - 100
+                width: bounds.width,
+                height: bounds.height - 60
             )
         }
         #endif
 
-        let cols = max(40, min(200, UInt16(availableSize.width / cellWidth)))
-        let rows = max(10, min(60, UInt16(availableSize.height / cellHeight)))
+        let cols = max(40, min(300, UInt16(availableSize.width / cellWidth)))
+        let rows = max(10, min(100, UInt16(availableSize.height / cellHeight)))
 
+        print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), available: \(availableSize))")
         return (cols, rows)
     }
 }

@@ -192,8 +192,10 @@ private struct EmptyWorkspacesView: View {
 struct NewWorkspaceView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var sessionStore: SessionStore
     @State private var selectedProfile: ServerProfile?
     @State private var sessionName = ""
+    @State private var selectedColor: SessionColor = .cyan
 
     var body: some View {
         NavigationStack {
@@ -251,6 +253,31 @@ struct NewWorkspaceView: View {
                                     .font(.willoCaption)
                                     .foregroundStyle(Color.textTertiary)
                             }
+
+                            // Session color
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Color")
+                                    .font(.willoCaption)
+                                    .foregroundStyle(Color.textSecondary)
+
+                                HStack(spacing: 12) {
+                                    ForEach(SessionColor.allCases, id: \.self) { color in
+                                        Circle()
+                                            .fill(color.color)
+                                            .frame(width: 28, height: 28)
+                                            .overlay {
+                                                if selectedColor == color {
+                                                    Circle()
+                                                        .stroke(Color.white, lineWidth: 2)
+                                                }
+                                            }
+                                            .shadow(color: selectedColor == color ? color.color.opacity(0.5) : .clear, radius: 4)
+                                            .onTapGesture {
+                                                selectedColor = color
+                                            }
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(20)
@@ -295,7 +322,16 @@ struct NewWorkspaceView: View {
     private func createWorkspace() {
         guard let profile = selectedProfile else { return }
 
+        // Create WilloSession (new session-based architecture)
+        let session = sessionStore.createSession(
+            profile: profile,
+            name: sessionName,
+            color: selectedColor
+        )
+
+        // Also create legacy Workspace for backward compatibility
         let workspace = Workspace(
+            id: session.id,  // Use same ID for linking
             serverProfile: profile,
             sessionName: sessionName
         )
@@ -397,5 +433,6 @@ private struct ServerSelectionCard: View {
         state.activeWorkspaceId = state.workspaces.first?.id
         return state
     }())
+    .environmentObject(SessionStore())
     .preferredColorScheme(.dark)
 }
