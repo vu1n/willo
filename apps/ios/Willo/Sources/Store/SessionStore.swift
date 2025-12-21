@@ -103,6 +103,20 @@ final class SessionStore: ObservableObject {
         return session
     }
 
+    /// Add a pre-created session (for migration from workspaces)
+    func addSession(_ session: WilloSession) {
+        // Check if session with this ID already exists
+        guard !sessions.contains(where: { $0.id == session.id }) else { return }
+
+        sessions.append(session)
+
+        if activeSessionId == nil {
+            activeSessionId = session.id
+        }
+
+        saveSessions()
+    }
+
     /// Switch to a session by ID
     func setActiveSession(_ sessionId: UUID?) {
         guard sessionId != activeSessionId else { return }

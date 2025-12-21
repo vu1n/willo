@@ -79,8 +79,11 @@ final class SessionManager: ObservableObject {
             // to WilloTerminalViewRepresentable via callbacks. The PTYBridge was
             // causing issues by consuming dataStream before the view could.
 
-            // Set initial terminal size
-            try await session.resize(cols: 80, rows: 24)
+            // Set initial terminal size from config (not hardcoded)
+            let cols = session.config.terminalCols
+            let rows = session.config.terminalRows
+            print("[SessionManager] Setting initial terminal size: \(cols)x\(rows)")
+            try await session.resize(cols: cols, rows: rows)
 
             session.setState(.connected)
         } catch {
