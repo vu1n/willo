@@ -157,8 +157,10 @@ extension WilloSession: Codable {
         lastActivityAt = try container.decode(Date.self, forKey: .lastActivityAt)
 
         // Server profile needs to be resolved separately
-        // For now, create a placeholder - will be resolved by SessionStore
+        // Store the profile ID in a placeholder profile for later resolution
+        let profileId = try container.decode(UUID.self, forKey: .serverProfileId)
         serverProfile = ServerProfile(
+            id: profileId,  // Preserve ID for resolution
             displayName: "Loading...",
             hostname: "",
             username: ""

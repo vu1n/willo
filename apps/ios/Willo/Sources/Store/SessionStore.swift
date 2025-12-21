@@ -279,13 +279,12 @@ final class SessionStore: ObservableObject {
     /// Resolve server profiles after loading
     /// Call this after server profiles are available
     func resolveServerProfiles(from profiles: [ServerProfile]) {
+        var sessionsToRemove: [UUID] = []
+
         for (index, session) in sessions.enumerated() {
-            // Sessions encode serverProfileId, need to resolve to actual profile
-            // For now, match by hostname+username since we don't have the ID
-            if let matchingProfile = profiles.first(where: {
-                $0.hostname == session.serverProfile.hostname &&
-                $0.username == session.serverProfile.username
-            }) {
+            // Match by server profile ID (stored in placeholder during decode)
+            if let matchingProfile = profiles.first(where: { $0.id == session.serverProfile.id }) {
+                print("[SessionStore] Resolved profile for session '\(session.name)': \(matchingProfile.displayName)")
                 // Create a new session with the resolved profile
                 sessions[index] = WilloSession(
                     id: session.id,
@@ -298,6 +297,18 @@ final class SessionStore: ObservableObject {
                     createdAt: session.createdAt,
                     lastActivityAt: session.lastActivityAt
                 )
+            } else if session.serverProfile.hostname.isEmpty {
+                // Profile was deleted or not found - mark for removal
+                print("[SessionStore] Could not resolve profile for session '\(session.name)' (ID: \(session.serverProfile.id)) - marking for removal")
+                sessionsToRemove.append(session.id)
+            }
+        }
+
+        // Remove sessions with unresolved profiles
+        if !sessionsToRemove.isEmpty {
+            sessions.removeAll { sessionsToRemove.contains($0.id) }
+            if let activeId = activeSessionId, sessionsToRemove.contains(activeId) {
+                activeSessionId = sessions.first?.id
             }
         }
     }

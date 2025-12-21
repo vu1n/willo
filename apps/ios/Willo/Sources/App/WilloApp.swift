@@ -16,6 +16,9 @@ final class AppServices: ObservableObject {
         let appManager = GhosttyAppManager()
         self.sessionManager = SessionManager(appManager: appManager)
         self.sessionStore = SessionStore(sessionManager: sessionManager)
+
+        // Resolve server profiles for any persisted sessions
+        sessionStore.resolveServerProfiles(from: appState.serverProfiles)
     }
 }
 
