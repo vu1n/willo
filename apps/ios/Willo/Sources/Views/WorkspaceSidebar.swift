@@ -343,7 +343,20 @@ struct NewWorkspaceView: View {
 
     private func generateSessionName(for profile: ServerProfile) -> String {
         let hostPart = profile.hostname.split(separator: ".").first ?? "server"
-        return "willo/\(profile.username)/\(hostPart)"
+        let baseName = "willo/\(profile.username)/\(hostPart)"
+
+        // Check for existing sessions with same base name and find next available number
+        let existingNames = sessionStore.sessions.map { $0.name }
+        if !existingNames.contains(baseName) {
+            return baseName
+        }
+
+        // Find next available number
+        var counter = 2
+        while existingNames.contains("\(baseName)/\(counter)") {
+            counter += 1
+        }
+        return "\(baseName)/\(counter)"
     }
 }
 

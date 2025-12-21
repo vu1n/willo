@@ -35,6 +35,7 @@ struct SessionContainerView: View {
                                 connectionState: session.connectionState
                             )
                         )
+                        .id(session.id)  // Force new view instance per session
                         .offset(x: swipeOffset)
                     } else {
                         // No active session

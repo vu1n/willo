@@ -16,10 +16,14 @@ struct SessionTabBar: View {
                         SessionTab(
                             session: session,
                             isActive: session.id == sessionStore.activeSessionId,
-                            namespace: tabNamespace
-                        ) {
-                            sessionStore.setActiveSession(session.id)
-                        }
+                            namespace: tabNamespace,
+                            onTap: {
+                                sessionStore.setActiveSession(session.id)
+                            },
+                            onClose: {
+                                sessionStore.closeSession(session.id)
+                            }
+                        )
                     }
                 }
                 .padding(.horizontal, 12)
@@ -63,55 +67,79 @@ struct SessionTab: View {
     let isActive: Bool
     let namespace: Namespace.ID
     let onTap: () -> Void
+    let onClose: () -> Void
 
     @State private var isPressed = false
+    @State private var showCloseButton = false
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
-                // Activity indicator
-                SessionActivityIndicator(state: session.activityState, color: session.color)
+        HStack(spacing: 4) {
+            Button(action: onTap) {
+                HStack(spacing: 8) {
+                    // Activity indicator
+                    SessionActivityIndicator(state: session.activityState, color: session.color)
 
-                // Session name
-                Text(session.displayTitle)
-                    .font(.willoMono(.caption, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? Color.textPrimary : Color.textSecondary)
-                    .lineLimit(1)
+                    // Session name
+                    Text(session.displayTitle)
+                        .font(.willoMono(.caption, weight: isActive ? .semibold : .regular))
+                        .foregroundStyle(isActive ? Color.textPrimary : Color.textSecondary)
+                        .lineLimit(1)
 
-                // Unread badge
-                if session.activityState.hasUnread {
-                    UnreadBadge(count: session.activityState.unreadCount)
+                    // Unread badge
+                    if session.activityState.hasUnread {
+                        UnreadBadge(count: session.activityState.unreadCount)
+                    }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background {
-                if isActive {
-                    // Active tab background with color accent
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.machineGray)
-                        .overlay(alignment: .bottom) {
-                            // Color accent bar
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(session.color.color)
-                                .frame(height: 2)
-                                .padding(.horizontal, 4)
+            .buttonStyle(.plain)
+
+            // Close button (show on hover/active)
+            if isActive || showCloseButton {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.textTertiary)
+                        .frame(width: 16, height: 16)
+                        .background {
+                            Circle()
+                                .fill(Color.machineGray.opacity(0.8))
                         }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(session.color.color.opacity(0.3), lineWidth: 1)
-                        }
-                        .matchedGeometryEffect(id: "activeTab", in: namespace)
-                } else {
-                    // Inactive tab - subtle background on press
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isPressed ? Color.machineGray.opacity(0.5) : Color.clear)
                 }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
-            .scaleEffect(isPressed ? 0.95 : 1.0)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background {
+            if isActive {
+                // Active tab background with color accent
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.machineGray)
+                    .overlay(alignment: .bottom) {
+                        // Color accent bar
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(session.color.color)
+                            .frame(height: 2)
+                            .padding(.horizontal, 4)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(session.color.color.opacity(0.3), lineWidth: 1)
+                    }
+                    .matchedGeometryEffect(id: "activeTab", in: namespace)
+            } else {
+                // Inactive tab - subtle background on press
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isPressed ? Color.machineGray.opacity(0.5) : Color.clear)
+            }
+        }
+        .scaleEffect(isPressed ? 0.95 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isActive)
+        .animation(.easeInOut(duration: 0.15), value: showCloseButton)
+        .onHover { hovering in
+            showCloseButton = hovering
+        }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in isPressed = true }
