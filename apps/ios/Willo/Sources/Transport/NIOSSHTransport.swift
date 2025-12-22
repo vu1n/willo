@@ -8,7 +8,6 @@ import Crypto
 private actor SSHTransportState {
     var state: TransportState = .disconnected
     var stateContinuation: AsyncStream<TransportState>.Continuation?
-    var dataContinuation: AsyncStream<Data>.Continuation?
 
     func setState(_ newState: TransportState) {
         state = newState
@@ -18,18 +17,6 @@ private actor SSHTransportState {
     func setStateContinuation(_ continuation: AsyncStream<TransportState>.Continuation) {
         stateContinuation = continuation
         continuation.yield(state)
-    }
-
-    func setDataContinuation(_ continuation: AsyncStream<Data>.Continuation) {
-        dataContinuation = continuation
-    }
-
-    func yieldData(_ data: Data) {
-        dataContinuation?.yield(data)
-    }
-
-    func finishData() {
-        dataContinuation?.finish()
     }
 }
 
@@ -119,15 +106,27 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         }
     }()
 
-    private(set) lazy var dataStream: AsyncStream<Data> = {
-        AsyncStream(bufferingPolicy: .unbounded) { continuation in
-            Task { await self.stateActor.setDataContinuation(continuation) }
+    /// Data stream - creates a new stream each time to avoid multiple consumer issues
+    /// IMPORTANT: Only ONE consumer should iterate this at a time
+    /// NOTE: If setDataCallback was called first, this stream won't receive data
+    var dataStream: AsyncStream<Data> {
+        AsyncStream(bufferingPolicy: .unbounded) { [dataCallbackState] continuation in
+            print("[SSH] Creating new data stream subscription")
+            // Set secondary callback - won't overwrite a primary callback from setDataCallback
+            dataCallbackState.setSecondaryCallback { data in
+                continuation.yield(data)
+            }
+            // Handle stream termination
+            continuation.onTermination = { _ in
+                print("[SSH] Data stream terminated, clearing callback")
+                dataCallbackState.clearCallback()
+            }
         }
-    }()
+    }
 
     func initializeStreams() {
         _ = stateStream
-        _ = dataStream
+        // Note: dataStream is no longer lazy, so no need to access it here
     }
 
     /// Set a direct callback for data - this is the PREFERRED method
@@ -320,10 +319,9 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
 
     /// Thread-safe handler for incoming data
     private func handleIncomingData(_ data: Data) {
-        // Deliver via callback (preferred) - will also buffer if no callback yet
+        // Deliver via callback state - will buffer if no callback yet, or deliver
+        // to either the primary callback (from setDataCallback) or secondary callback (from dataStream)
         dataCallbackState.deliverData(data)
-        // Also yield to async stream for backwards compatibility
-        Task { await stateActor.yieldData(data) }
     }
 
     func disconnect() async throws {
@@ -338,7 +336,6 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         channel = nil
 
         await stateActor.setState(.disconnected)
-        await stateActor.finishData()
         dataCallbackState.finish()
     }
 

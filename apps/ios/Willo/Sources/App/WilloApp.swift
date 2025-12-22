@@ -11,6 +11,7 @@ final class AppServices: ObservableObject {
     let appearanceSettings = AppearanceSettings()
     let sessionManager: SessionManager
     let sessionStore: SessionStore
+    let layoutStore = LayoutStore()
 
     private init() {
         let appManager = GhosttyAppManager()
@@ -35,6 +36,7 @@ public struct WilloApp: App {
                 .environmentObject(AppServices.shared.appearanceSettings)
                 .environmentObject(AppServices.shared.sessionManager)
                 .environmentObject(AppServices.shared.sessionStore)
+                .environmentObject(AppServices.shared.layoutStore)
         }
     }
 }
@@ -57,16 +59,72 @@ public final class AppState: ObservableObject {
 
     private static let serverProfilesKey = "serverProfiles"
     private var isLoading = false
+    private let cloudSync = CloudSyncManager.shared
 
     init() {
         loadServerProfiles()
 
         // Set up observation for saving after init completes
         setupAutoSave()
+
+        // Set up cloud sync
+        setupCloudSync()
     }
 
     var activeWorkspace: Workspace? {
         workspaces.first { $0.id == activeWorkspaceId }
+    }
+
+    // MARK: - Cloud Sync Setup
+
+    private func setupCloudSync() {
+        // Listen for external changes from iCloud
+        cloudSync.syncEvents
+            .sink { [weak self] event in
+                guard let self = self else { return }
+                switch event {
+                case .profilesChanged:
+                    self.mergeCloudProfiles()
+                default:
+                    break
+                }
+            }
+            .store(in: &cancellables)
+
+        // Perform initial merge with cloud data
+        mergeCloudProfiles()
+    }
+
+    private func mergeCloudProfiles() {
+        guard let cloudProfiles = cloudSync.loadServerProfiles() else {
+            print("[AppState] No cloud profiles to merge")
+            return
+        }
+
+        print("[AppState] Merging \(cloudProfiles.count) profiles from iCloud")
+
+        // For each cloud profile, check if we have it locally
+        for cloudProfile in cloudProfiles {
+            if let localIndex = serverProfiles.firstIndex(where: { $0.id == cloudProfile.id }) {
+                // Profile exists - merge by timestamp (cloud wins if newer)
+                let localProfile = serverProfiles[localIndex]
+                let cloudLastConnected = cloudProfile.lastConnected ?? Date.distantPast
+                let localLastConnected = localProfile.lastConnected ?? Date.distantPast
+
+                if cloudLastConnected > localLastConnected {
+                    print("[AppState] Updating profile \(cloudProfile.displayName) from iCloud")
+                    // Preserve local auth method (passwords stay local)
+                    serverProfiles[localIndex] = cloudProfile.toServerProfile(preservingAuthFrom: localProfile)
+                }
+            } else {
+                // New profile from cloud
+                print("[AppState] Adding new profile from iCloud: \(cloudProfile.displayName)")
+                serverProfiles.append(cloudProfile.toServerProfile(preservingAuthFrom: nil))
+            }
+        }
+
+        // Save merged profiles locally (without triggering cloud sync)
+        saveServerProfilesLocally()
     }
 
     // MARK: - Persistence
@@ -93,18 +151,26 @@ public final class AppState: ObservableObject {
         do {
             serverProfiles = try JSONDecoder().decode([ServerProfile].self, from: data)
         } catch {
-            print("Failed to load server profiles: \(error)")
+            print("[AppState] Failed to load server profiles: \(error)")
         }
     }
 
     private func saveServerProfiles() {
         guard !isLoading else { return }
 
+        // Save locally
+        saveServerProfilesLocally()
+
+        // Sync to iCloud
+        cloudSync.syncServerProfiles(serverProfiles)
+    }
+
+    private func saveServerProfilesLocally() {
         do {
             let data = try JSONEncoder().encode(serverProfiles)
             UserDefaults.standard.set(data, forKey: Self.serverProfilesKey)
         } catch {
-            print("Failed to save server profiles: \(error)")
+            print("[AppState] Failed to save server profiles: \(error)")
         }
     }
 }

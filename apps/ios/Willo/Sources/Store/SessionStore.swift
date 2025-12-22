@@ -33,6 +33,9 @@ final class SessionStore: ObservableObject {
     /// Thumbnail manager for capturing terminal screenshots
     let thumbnailManager = ThumbnailManager()
 
+    /// Cloud sync manager
+    private let cloudSync = CloudSyncManager.shared
+
     // MARK: - Persistence Keys
 
     private static let sessionsKey = "willoSessions"
@@ -43,6 +46,7 @@ final class SessionStore: ObservableObject {
     init(sessionManager: SessionManager? = nil) {
         self.sessionManager = sessionManager
         loadSessions()
+        setupCloudSync()
     }
 
     // MARK: - Terminal Session Management
@@ -294,10 +298,63 @@ final class SessionStore: ObservableObject {
         saveSessions()
     }
 
+    // MARK: - Cloud Sync Setup
+
+    private func setupCloudSync() {
+        // Listen for external changes from iCloud
+        cloudSync.syncEvents
+            .sink { [weak self] event in
+                guard let self = self else { return }
+                switch event {
+                case .sessionsChanged:
+                    self.mergeCloudSessions()
+                default:
+                    break
+                }
+            }
+            .store(in: &cancellables)
+
+        // Perform initial merge with cloud data
+        mergeCloudSessions()
+    }
+
+    private func mergeCloudSessions() {
+        guard let cloudSessions = cloudSync.loadSessions() else {
+            print("[SessionStore] No cloud sessions to merge")
+            return
+        }
+
+        print("[SessionStore] Merging \(cloudSessions.count) sessions from iCloud")
+
+        // For each cloud session, check if we have it locally
+        for cloudSession in cloudSessions {
+            if let localIndex = sessions.firstIndex(where: { $0.id == cloudSession.id }) {
+                // Session exists - merge by timestamp (cloud wins if newer)
+                let localSession = sessions[localIndex]
+                if cloudSession.lastActivityAt > localSession.lastActivityAt {
+                    print("[SessionStore] Updating session \(cloudSession.name) from iCloud")
+                    sessions[localIndex] = cloudSession.toWilloSession(
+                        serverProfile: localSession.serverProfile,
+                        connectionState: localSession.connectionState,
+                        activityState: localSession.activityState
+                    )
+                }
+            } else {
+                // New session from cloud - will need profile resolution
+                print("[SessionStore] New session from iCloud: \(cloudSession.name) - needs profile resolution")
+                // Store the cloud session temporarily and resolve after profiles load
+                // For now, we'll skip adding it until profiles are resolved
+            }
+        }
+
+        // Save merged sessions locally
+        saveSessionsLocally()
+    }
+
     // MARK: - Persistence
 
     private func loadSessions() {
-        // Load session IDs and metadata
+        // Load session IDs and metadata from local storage
         guard let data = UserDefaults.standard.data(forKey: Self.sessionsKey) else {
             return
         }
@@ -318,6 +375,14 @@ final class SessionStore: ObservableObject {
     }
 
     private func saveSessions() {
+        // Save to local storage
+        saveSessionsLocally()
+
+        // Sync to iCloud
+        cloudSync.syncSessions(sessions)
+    }
+
+    private func saveSessionsLocally() {
         do {
             let data = try JSONEncoder().encode(sessions)
             UserDefaults.standard.set(data, forKey: Self.sessionsKey)

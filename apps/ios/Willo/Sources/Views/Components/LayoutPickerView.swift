@@ -6,6 +6,7 @@ import SwiftUI
 struct LayoutPickerView: View {
     @Binding var selectedLayoutId: String?
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var layoutStore: LayoutStore
 
     let layouts = LayoutTemplate.builtIn
     let currentDevice = DeviceOrigin.current
@@ -41,23 +42,83 @@ struct LayoutPickerView: View {
                     // Device filter legend
                     DeviceLegend()
 
-                    // Layout grid
-                    LazyVGrid(columns: [
-                        GridItem(.flexible(), spacing: 16),
-                        GridItem(.flexible(), spacing: 16)
-                    ], spacing: 16) {
-                        ForEach(layouts) { layout in
-                            LayoutCard(
-                                layout: layout,
-                                isSelected: selectedLayoutId == layout.id,
-                                currentDevice: currentDevice
-                            ) {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    selectedLayoutId = layout.id
+                    // User layouts section
+                    if !layoutStore.userLayouts.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "star.fill")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color.terminalAmber)
+
+                                Text("MY LAYOUTS")
+                                    .font(.willoSectionHeader)
+                                    .tracking(1)
+                                    .foregroundStyle(Color.textTertiary)
+
+                                Spacer()
+                            }
+                            .padding(.horizontal, 4)
+
+                            LazyVGrid(columns: [
+                                GridItem(.flexible(), spacing: 16),
+                                GridItem(.flexible(), spacing: 16)
+                            ], spacing: 16) {
+                                ForEach(layoutStore.getAllLayoutTemplates()) { layout in
+                                    LayoutCard(
+                                        layout: layout,
+                                        isSelected: selectedLayoutId == layout.id,
+                                        currentDevice: currentDevice,
+                                        onDelete: {
+                                            if let uuid = UUID(uuidString: layout.id) {
+                                                layoutStore.deleteLayout(uuid)
+                                            }
+                                        }
+                                    ) {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                            selectedLayoutId = layout.id
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+
+                    // Built-in layouts section
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.terminalCyan)
+
+                            Text("BUILT-IN LAYOUTS")
+                                .font(.willoSectionHeader)
+                                .tracking(1)
+                                .foregroundStyle(Color.textTertiary)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 4)
+
+                        // Layout grid
+                        LazyVGrid(columns: [
+                            GridItem(.flexible(), spacing: 16),
+                            GridItem(.flexible(), spacing: 16)
+                        ], spacing: 16) {
+                            ForEach(layouts) { layout in
+                                LayoutCard(
+                                    layout: layout,
+                                    isSelected: selectedLayoutId == layout.id,
+                                    currentDevice: currentDevice
+                                ) {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        selectedLayoutId = layout.id
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.top, layoutStore.userLayouts.isEmpty ? 0 : 16)
 
                     // None option
                     NoneLayoutCard(isSelected: selectedLayoutId == nil) {
@@ -122,6 +183,7 @@ private struct LayoutCard: View {
     let layout: LayoutTemplate
     let isSelected: Bool
     let currentDevice: DeviceOrigin
+    var onDelete: (() -> Void)? = nil
     let action: () -> Void
 
     private var isSuitableForDevice: Bool {
@@ -186,6 +248,25 @@ private struct LayoutCard: View {
                         .foregroundStyle(Color.terminalCyan)
                         .background(Circle().fill(Color.machineBlack).padding(-2))
                         .offset(x: 6, y: -6)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let onDelete = onDelete, layout.isUserCreated {
+                    Button {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.terminalRed)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.machineBlack))
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(Color.terminalRed.opacity(0.3), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: -6, y: -6)
                 }
             }
         }
@@ -409,8 +490,15 @@ private struct LayoutSchematic: View {
                 .frame(width: size.width, height: size.height)
 
             default:
-                SchematicPane(label: "?")
-                    .frame(width: size.width, height: size.height)
+                // For user layouts or unknown layouts - show generic custom layout schematic
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) {
+                        SchematicPane(label: "")
+                        SchematicPane(label: "")
+                    }
+                    SchematicPane(label: "CUSTOM")
+                }
+                .frame(width: size.width, height: size.height)
             }
         }
     }
@@ -461,6 +549,7 @@ private struct SchematicTab: View {
 /// Compact horizontal layout picker for inline use
 struct InlineLayoutPicker: View {
     @Binding var selectedLayoutId: String?
+    @EnvironmentObject var layoutStore: LayoutStore
     @State private var showingFullPicker = false
 
     var body: some View {
@@ -519,7 +608,19 @@ struct InlineLayoutPicker: View {
 
     private var selectedLayout: LayoutTemplate? {
         guard let id = selectedLayoutId else { return nil }
-        return LayoutTemplate.builtIn.first { $0.id == id }
+
+        // Check built-in layouts first
+        if let builtIn = LayoutTemplate.builtIn.first(where: { $0.id == id }) {
+            return builtIn
+        }
+
+        // Check user layouts
+        if let uuid = UUID(uuidString: id),
+           let userLayout = layoutStore.getLayout(uuid) {
+            return userLayout.toLayoutTemplate()
+        }
+
+        return nil
     }
 }
 
@@ -528,6 +629,7 @@ struct InlineLayoutPicker: View {
 #if DEBUG
 #Preview("Layout Picker") {
     LayoutPickerView(selectedLayoutId: .constant("dev"))
+        .environmentObject(LayoutStore())
 }
 
 #Preview("Inline Picker") {
@@ -538,5 +640,6 @@ struct InlineLayoutPicker: View {
     .padding()
     .background(Color.machineDark)
     .preferredColorScheme(.dark)
+    .environmentObject(LayoutStore())
 }
 #endif

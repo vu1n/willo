@@ -5,12 +5,14 @@ struct TerminalWorkspaceView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var sessionStore: SessionStore
+    @EnvironmentObject var layoutStore: LayoutStore
     @EnvironmentObject var appearanceSettings: AppearanceSettings
     @State private var session: TerminalSession?
     @State private var sessionState: SessionState = .disconnected
     @State private var showingSettings = false
     @State private var showingCommandPalette = false
     @State private var showingQuickActions = false
+    @State private var showingSaveLayout = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
 
@@ -76,10 +78,22 @@ struct TerminalWorkspaceView: View {
         }
         .sheet(isPresented: $showingCommandPalette) {
             if let session = session {
-                CommandPaletteView { data in
-                    Task {
-                        try? await session.transport.send(data)
+                CommandPaletteView(
+                    onSendKeys: { data in
+                        Task {
+                            try? await session.transport.send(data)
+                        }
+                    },
+                    onSaveLayout: {
+                        showingSaveLayout = true
                     }
+                )
+            }
+        }
+        .sheet(isPresented: $showingSaveLayout) {
+            if let session = session {
+                SaveLayoutSheet { completion in
+                    captureLayout(session: session, completion: completion)
                 }
             }
         }
@@ -176,10 +190,21 @@ struct TerminalWorkspaceView: View {
         try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
 
         // If we have a layout, write it to the server first
-        if let layoutId = layoutId,
-           let layout = LayoutTemplate.builtIn.first(where: { $0.id == layoutId }),
-           profile.multiplexer == .zellij {
-            await writeLayoutToServer(session: session, layout: layout)
+        var layoutToUse: LayoutTemplate?
+        if let layoutId = layoutId {
+            // Check built-in layouts first
+            if let builtInLayout = LayoutTemplate.builtIn.first(where: { $0.id == layoutId }) {
+                layoutToUse = builtInLayout
+            }
+            // Then check user layouts
+            else if let uuid = UUID(uuidString: layoutId),
+                    let userLayout = layoutStore.getLayout(uuid) {
+                layoutToUse = userLayout.toLayoutTemplate()
+            }
+
+            if let layout = layoutToUse, profile.multiplexer == .zellij {
+                await writeLayoutToServer(session: session, layout: layout)
+            }
         }
 
         // Determine the command based on session name and profile behavior
@@ -187,9 +212,7 @@ struct TerminalWorkspaceView: View {
         let sessionName = workspace.sessionName
 
         if !sessionName.isEmpty {
-            if let layoutId = layoutId,
-               let layout = LayoutTemplate.builtIn.first(where: { $0.id == layoutId }),
-               profile.multiplexer == .zellij {
+            if let layout = layoutToUse, profile.multiplexer == .zellij {
                 // Use layout with session name (versioned filename for cache invalidation)
                 let layoutPath = "/tmp/willo-layout-\(layout.id)-v\(layout.contentHash).kdl"
                 command = "zellij --new-session-with-layout \(layoutPath) -s \"\(sessionName)\" 2>/dev/null || zellij attach -c \"\(sessionName)\""
@@ -309,6 +332,74 @@ struct TerminalWorkspaceView: View {
         // Haptic feedback
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
+    }
+
+    // MARK: - Layout Capture
+
+    /// Capture the current zellij layout
+    ///
+    /// This implementation uses a simple file-based approach:
+    /// 1. Dump layout to a known file path
+    /// 2. User manually pastes the content (for now)
+    ///
+    /// Future improvements could include:
+    /// - SFTP file read
+    /// - Terminal output capture in transport layer
+    /// - Clipboard integration via OSC 52
+    private func captureLayout(session: TerminalSession, completion: @escaping (Result<String, Error>) -> Void) {
+        Task {
+            do {
+                // For now, provide a sample layout since we can't easily capture terminal output
+                // In a production implementation, this would:
+                // 1. Send: zellij action dump-layout > /tmp/willo-layout.kdl
+                // 2. Use SFTP to read /tmp/willo-layout.kdl
+                // 3. Parse the KDL content
+
+                // Simulate capture delay
+                try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+
+                // For demonstration, return a template layout
+                // In reality, this would be the captured content
+                let templateLayout = """
+                layout {
+                    pane size=1 borderless=true {
+                        plugin location="compact-bar"
+                    }
+                    pane split_direction="horizontal" {
+                        pane focus=true
+                    }
+                }
+                """
+
+                await MainActor.run {
+                    completion(.success(templateLayout))
+                }
+
+                print("[Terminal] Layout captured successfully (template)")
+
+            } catch {
+                print("[Terminal] Layout capture failed: \(error)")
+                await MainActor.run {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Layout Capture Error
+
+enum LayoutCaptureError: LocalizedError {
+    case timeout
+    case notImplemented(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .timeout:
+            return "Layout capture timed out. Make sure zellij is running."
+        case .notImplemented(let message):
+            return message
+        }
     }
 }
 

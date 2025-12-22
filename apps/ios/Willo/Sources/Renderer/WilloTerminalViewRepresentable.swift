@@ -24,13 +24,17 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     /// Thumbnail manager for capturing screenshots (optional)
     var thumbnailManager: ThumbnailManager?
 
+    /// Session store for activity tracking (optional)
+    var sessionStore: SessionStore?
+
     init(
         transport: TerminalTransport? = nil,
         fontSize: CGFloat = 24.0,
         onInput: ((Data) -> Void)? = nil,
         onResize: ((Int, Int) -> Void)? = nil,
         sessionId: UUID? = nil,
-        thumbnailManager: ThumbnailManager? = nil
+        thumbnailManager: ThumbnailManager? = nil,
+        sessionStore: SessionStore? = nil
     ) {
         self.transport = transport
         self.fontSize = fontSize
@@ -38,6 +42,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         self.onResize = onResize
         self.sessionId = sessionId
         self.thumbnailManager = thumbnailManager
+        self.sessionStore = sessionStore
     }
 
     /// Coordinator manages the data stream subscription
@@ -45,6 +50,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         var terminalView: WilloTerminalView?
         var dataTask: Task<Void, Never>?
         var currentFontSize: CGFloat = 24.0
+        var activityDetector: ActivityDetector?
 
         deinit {
             dataTask?.cancel()
@@ -59,6 +65,11 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         let view = WilloTerminalView(frame: .zero)
         context.coordinator.terminalView = view
         context.coordinator.currentFontSize = fontSize
+
+        // Initialize activity detector if session store is available
+        if sessionStore != nil {
+            context.coordinator.activityDetector = ActivityDetector()
+        }
 
         // Ensure the view fills its container
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -120,6 +131,8 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         // Use callback-based approach for both Mosh and SSH transports
         // This avoids AsyncStream multiple consumer issues with TransportPTYBridge
         let coordinator = context.coordinator
+        let capturedSessionId = sessionId
+        let capturedSessionStore = sessionStore
 
         if let moshTransport = transport as? MoshTransport {
             print("[TerminalView] Setting up Mosh data callback")
@@ -129,16 +142,30 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
                     if let view = coordinator?.terminalView {
                         view.feed(data)
                     }
+                    // Process activity detection
+                    Self.processActivityDetection(
+                        data: data,
+                        coordinator: coordinator,
+                        sessionId: capturedSessionId,
+                        sessionStore: capturedSessionStore
+                    )
                 }
             }
         } else if let sshTransport = transport as? NIOSSHTransport {
             print("[TerminalView] Setting up SSH data callback")
             sshTransport.setDataCallback { [weak coordinator] data in
-                // Must dispatch to main thread since callback comes from background
+                // Must dispatch to main thread since callback comes from NIO event loop
                 DispatchQueue.main.async {
                     if let view = coordinator?.terminalView {
                         view.feed(data)
                     }
+                    // Process activity detection
+                    Self.processActivityDetection(
+                        data: data,
+                        coordinator: coordinator,
+                        sessionId: capturedSessionId,
+                        sessionStore: capturedSessionStore
+                    )
                 }
             }
         } else {
@@ -149,8 +176,50 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
                     if let view = context.coordinator.terminalView {
                         view.feed(data)
                     }
+                    // Process activity detection
+                    Self.processActivityDetection(
+                        data: data,
+                        coordinator: context.coordinator,
+                        sessionId: capturedSessionId,
+                        sessionStore: capturedSessionStore
+                    )
                 }
                 print("[TerminalView] Data stream ended")
+            }
+        }
+    }
+
+    /// Process activity detection for incoming data
+    private static func processActivityDetection(
+        data: Data,
+        coordinator: Coordinator?,
+        sessionId: UUID?,
+        sessionStore: SessionStore?
+    ) {
+        guard let coordinator = coordinator,
+              let detector = coordinator.activityDetector,
+              let sessionId = sessionId,
+              let sessionStore = sessionStore else {
+            return
+        }
+
+        Task { @MainActor in
+            // Process output through detector
+            if let newState = detector.processOutput(data) {
+                // State changed - update session store
+                print("[ActivityDetector] State changed to: \(newState)")
+
+                // Check if session is in background (not active)
+                let isBackground = sessionStore.activeSessionId != sessionId
+
+                if isBackground {
+                    // Session is in background - increment unread counter
+                    sessionStore.incrementUnread(sessionId)
+                    print("[ActivityDetector] Incremented unread for background session")
+                } else {
+                    // Session is active - just update state
+                    sessionStore.setActivityState(sessionId, state: newState)
+                }
             }
         }
     }
@@ -190,7 +259,8 @@ struct SessionTerminalView: View {
                     }
                 },
                 sessionId: session.id,
-                thumbnailManager: sessionStore.thumbnailManager
+                thumbnailManager: sessionStore.thumbnailManager,
+                sessionStore: sessionStore
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: geometry.size) { newSize in

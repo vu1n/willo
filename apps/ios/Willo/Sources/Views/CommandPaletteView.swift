@@ -12,6 +12,9 @@ struct CommandPaletteView: View {
     /// Callback to send keybinding data to the terminal
     let onSendKeys: (Data) -> Void
 
+    /// Callback for save layout action
+    var onSaveLayout: (() -> Void)? = nil
+
     /// All available zellij commands (using zellij default keybindings)
     /// Ctrl+P = Pane mode (\u{10}), Ctrl+T = Tab mode (\u{14}), Ctrl+S = Scroll mode (\u{13}), Ctrl+O = Session mode (\u{0F})
     private let commands: [ZellijCommand] = [
@@ -45,6 +48,9 @@ struct CommandPaletteView: View {
         // Scroll/Copy mode (Ctrl+S mode)
         ZellijCommand(name: "Scroll Mode", icon: "scroll", keys: "\u{13}s", category: .scroll),
         ZellijCommand(name: "Search", icon: "magnifyingglass", keys: "\u{13}/", category: .scroll),
+
+        // Layout management (special commands)
+        ZellijCommand(name: "Save Current Layout", icon: "square.and.arrow.down", keys: "", category: .layout, isSpecialCommand: true),
     ]
 
     /// Filtered commands based on search text
@@ -172,6 +178,18 @@ struct CommandPaletteView: View {
     ]
 
     private func executeCommand(_ command: ZellijCommand) {
+        // Handle special commands
+        if command.isSpecialCommand {
+            switch command.name {
+            case "Save Current Layout":
+                onSaveLayout?()
+                dismiss()
+                return
+            default:
+                break
+            }
+        }
+
         // Zellij uses modal keybindings: first send the mode key,
         // wait briefly, then send the action key
         let keys = command.keys
@@ -297,12 +315,14 @@ struct ZellijCommand: Identifiable {
     let icon: String
     let keys: String  // Raw keybinding to send (e.g., "\u{10}" for Ctrl+P)
     let category: Category
+    var isSpecialCommand: Bool = false  // Commands that don't send keys but trigger app actions
 
     enum Category: String, CaseIterable {
         case panes
         case tabs
         case session
         case scroll
+        case layout
 
         var displayName: String {
             switch self {
@@ -310,6 +330,7 @@ struct ZellijCommand: Identifiable {
             case .tabs: return "Tabs"
             case .session: return "Session"
             case .scroll: return "Scroll & Copy"
+            case .layout: return "Layout"
             }
         }
 
@@ -319,6 +340,7 @@ struct ZellijCommand: Identifiable {
             case .tabs: return "rectangle.stack"
             case .session: return "server.rack"
             case .scroll: return "scroll"
+            case .layout: return "square.grid.2x2"
             }
         }
 
@@ -328,6 +350,7 @@ struct ZellijCommand: Identifiable {
             case .tabs: return .terminalAmber
             case .session: return .terminalGreen
             case .scroll: return .terminalBlue
+            case .layout: return .terminalMagenta
             }
         }
     }

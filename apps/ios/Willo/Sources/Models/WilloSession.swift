@@ -49,6 +49,17 @@ struct LayoutTemplate: Identifiable, Equatable {
     let icon: String
     let suitableFor: Set<DeviceOrigin>
     let kdlContent: String
+    let isUserCreated: Bool  // Distinguish user layouts from built-in
+
+    init(id: String, name: String, description: String, icon: String, suitableFor: Set<DeviceOrigin>, kdlContent: String, isUserCreated: Bool = false) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.icon = icon
+        self.suitableFor = suitableFor
+        self.kdlContent = kdlContent
+        self.isUserCreated = isUserCreated
+    }
 
     /// Short hash of content for cache invalidation (changes when layout is updated)
     var contentHash: String {
@@ -200,6 +211,38 @@ struct LayoutTemplate: Identifiable, Equatable {
     /// Get layouts suitable for a specific device
     static func forDevice(_ device: DeviceOrigin) -> [LayoutTemplate] {
         builtIn.filter { $0.suitableFor.contains(device) }
+    }
+}
+
+// MARK: - User Layout
+
+/// User-created layout saved from current zellij session
+struct UserLayout: Identifiable, Codable, Equatable {
+    let id: UUID
+    let name: String
+    let kdlContent: String
+    let createdAt: Date
+    let deviceOrigin: DeviceOrigin
+
+    init(id: UUID = UUID(), name: String, kdlContent: String, createdAt: Date = Date(), deviceOrigin: DeviceOrigin = .current) {
+        self.id = id
+        self.name = name
+        self.kdlContent = kdlContent
+        self.createdAt = createdAt
+        self.deviceOrigin = deviceOrigin
+    }
+
+    /// Convert to LayoutTemplate for use in picker
+    func toLayoutTemplate() -> LayoutTemplate {
+        LayoutTemplate(
+            id: id.uuidString,
+            name: name,
+            description: "Created \(createdAt.formatted(date: .abbreviated, time: .omitted))",
+            icon: "star.fill",
+            suitableFor: [deviceOrigin],
+            kdlContent: kdlContent,
+            isUserCreated: true
+        )
     }
 }
 
