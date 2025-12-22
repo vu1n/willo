@@ -10,6 +10,7 @@ struct TerminalWorkspaceView: View {
     @State private var sessionState: SessionState = .disconnected
     @State private var showingSettings = false
     @State private var showingCommandPalette = false
+    @State private var showingQuickActions = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
 
@@ -47,8 +48,29 @@ struct TerminalWorkspaceView: View {
             }
             .padding(.bottom, 56) // Above status bar height
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: voiceManager.state)
+
+            // Quick actions overlay (3-finger tap)
+            if showingQuickActions && sessionState == .connected {
+                ZellijQuickActionsOverlay(
+                    onAction: { action in
+                        executeZellijAction(action)
+                    },
+                    onDismiss: {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showingQuickActions = false
+                        }
+                    }
+                )
+            }
         }
         .background(Color.machineBlack)
+        .overlay {
+            // 3-finger tap gesture recognizer (UIKit-based for proper multi-touch)
+            ThreeFingerTapGestureView {
+                handleThreeFingerTap()
+            }
+            .allowsHitTesting(sessionState == .connected && workspace.serverProfile.multiplexer == .zellij)
+        }
         .sheet(isPresented: $showingSettings) {
             TerminalSettingsSheet()
         }
@@ -252,6 +274,37 @@ struct TerminalWorkspaceView: View {
 
         print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), fontSize: \(fontSize), available: \(availableSize))")
         return (cols, rows)
+    }
+
+    // MARK: - Zellij Quick Actions
+
+    /// Execute a zellij action by sending the command to the terminal
+    private func executeZellijAction(_ action: ZellijAction) {
+        guard let session = session else { return }
+
+        Task {
+            // Send the zellij command with newline
+            let command = action.command + "\n"
+            let data = Data(command.utf8)
+            try? await session.transport.send(data)
+
+            print("[Terminal] Executed zellij action: \(action.command)")
+        }
+    }
+
+    /// Handle 3-finger tap gesture
+    private func handleThreeFingerTap() {
+        // Only show if connected and using zellij
+        guard sessionState == .connected,
+              workspace.serverProfile.multiplexer == .zellij else { return }
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            showingQuickActions = true
+        }
+
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
     }
 }
 
