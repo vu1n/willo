@@ -30,6 +30,9 @@ final class SessionStore: ObservableObject {
     private weak var sessionManager: SessionManager?
     private var cancellables = Set<AnyCancellable>()
 
+    /// Thumbnail manager for capturing terminal screenshots
+    let thumbnailManager = ThumbnailManager()
+
     // MARK: - Persistence Keys
 
     private static let sessionsKey = "willoSessions"
@@ -203,6 +206,9 @@ final class SessionStore: ObservableObject {
             }
             activeTerminalSessions.removeValue(forKey: sessionId)
         }
+
+        // Clean up thumbnail
+        thumbnailManager.unregisterTerminalView(for: sessionId)
 
         sessions.removeAll { $0.id == sessionId }
 

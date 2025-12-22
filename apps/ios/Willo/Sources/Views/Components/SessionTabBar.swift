@@ -3,6 +3,7 @@ import SwiftUI
 /// Compact session tab bar for switching between sessions
 struct SessionTabBar: View {
     @EnvironmentObject var sessionStore: SessionStore
+    let highlightedSessionId: UUID?
     let onAddSession: () -> Void
 
     @Namespace private var tabNamespace
@@ -16,6 +17,7 @@ struct SessionTabBar: View {
                         SessionTab(
                             session: session,
                             isActive: session.id == sessionStore.activeSessionId,
+                            isHighlighted: session.id == highlightedSessionId,
                             namespace: tabNamespace,
                             onTap: {
                                 sessionStore.setActiveSession(session.id)
@@ -65,6 +67,7 @@ struct SessionTabBar: View {
 struct SessionTab: View {
     let session: WilloSession
     let isActive: Bool
+    let isHighlighted: Bool
     let namespace: Namespace.ID
     let onTap: () -> Void
     let onClose: () -> Void
@@ -128,9 +131,9 @@ struct SessionTab: View {
                     }
                     .overlay {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(session.color.color.opacity(0.4), lineWidth: 1)
+                            .strokeBorder(session.color.color.opacity(isHighlighted ? 1.0 : 0.4), lineWidth: isHighlighted ? 2 : 1)
                     }
-                    .shadow(color: session.color.color.opacity(0.2), radius: 4, x: 0, y: 0)
+                    .shadow(color: session.color.color.opacity(isHighlighted ? 0.6 : 0.2), radius: isHighlighted ? 8 : 4, x: 0, y: 0)
                     .matchedGeometryEffect(id: "activeTab", in: namespace)
             } else {
                 // Inactive tab: subtle color presence (LED dashboard style)
@@ -139,19 +142,21 @@ struct SessionTab: View {
                     .overlay(alignment: .leading) {
                         // Colored left edge indicator (like a status LED strip)
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(session.color.color.opacity(0.5))
-                            .frame(width: 2)
+                            .fill(session.color.color.opacity(isHighlighted ? 1.0 : 0.5))
+                            .frame(width: isHighlighted ? 4 : 2)
                             .padding(.vertical, 4)
                     }
                     .overlay {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(session.color.color.opacity(0.15), lineWidth: 1)
+                            .strokeBorder(session.color.color.opacity(isHighlighted ? 0.6 : 0.15), lineWidth: isHighlighted ? 2 : 1)
                     }
+                    .shadow(color: session.color.color.opacity(isHighlighted ? 0.3 : 0), radius: isHighlighted ? 4 : 0, x: 0, y: 0)
             }
         }
-        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .scaleEffect(isPressed ? 0.95 : (isHighlighted ? 1.05 : 1.0))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isActive)
         .animation(.easeInOut(duration: 0.15), value: showCloseButton)
+        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isHighlighted)
         .onHover { hovering in
             showCloseButton = hovering
         }
@@ -265,6 +270,7 @@ struct DeviceOriginBadge: View {
 /// Compact tab bar for phone - shows only icons with color indicators
 struct CompactSessionTabBar: View {
     @EnvironmentObject var sessionStore: SessionStore
+    let highlightedSessionId: UUID?
     let onAddSession: () -> Void
 
     var body: some View {
@@ -275,7 +281,8 @@ struct CompactSessionTabBar: View {
                     ForEach(sessionStore.sessions) { session in
                         CompactSessionDot(
                             session: session,
-                            isActive: session.id == sessionStore.activeSessionId
+                            isActive: session.id == sessionStore.activeSessionId,
+                            isHighlighted: session.id == highlightedSessionId
                         ) {
                             sessionStore.setActiveSession(session.id)
                         }
@@ -303,23 +310,24 @@ struct CompactSessionTabBar: View {
 struct CompactSessionDot: View {
     let session: WilloSession
     let isActive: Bool
+    let isHighlighted: Bool
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
             ZStack {
-                // Outer ring - always show but brighter when active
+                // Outer ring - always show but brighter when active or highlighted
                 Circle()
-                    .stroke(session.color.color.opacity(isActive ? 1.0 : 0.3), lineWidth: isActive ? 2 : 1)
-                    .frame(width: 24, height: 24)
+                    .stroke(session.color.color.opacity(isActive ? 1.0 : (isHighlighted ? 0.8 : 0.3)), lineWidth: isActive ? 2 : (isHighlighted ? 2 : 1))
+                    .frame(width: isHighlighted ? 28 : 24, height: isHighlighted ? 28 : 24)
 
                 // Main dot - always show session color
                 Circle()
-                    .fill(session.color.color.opacity(isActive ? 1.0 : 0.5))
-                    .frame(width: 16, height: 16)
+                    .fill(session.color.color.opacity(isActive ? 1.0 : (isHighlighted ? 0.8 : 0.5)))
+                    .frame(width: isHighlighted ? 18 : 16, height: isHighlighted ? 18 : 16)
 
-                // Inner glow when active
-                if isActive {
+                // Inner glow when active or highlighted
+                if isActive || isHighlighted {
                     Circle()
                         .fill(session.color.color.opacity(0.3))
                         .frame(width: 12, height: 12)
@@ -344,6 +352,7 @@ struct CompactSessionDot: View {
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: isActive)
+        .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isHighlighted)
     }
 }
 
@@ -363,7 +372,7 @@ private struct SessionTabBarPreview: View {
 
     var body: some View {
         VStack {
-            SessionTabBar { }
+            SessionTabBar(highlightedSessionId: nil) { }
                 .environmentObject(store)
             Spacer()
         }
@@ -391,7 +400,7 @@ private struct CompactSessionTabBarPreview: View {
 
     var body: some View {
         VStack {
-            CompactSessionTabBar { }
+            CompactSessionTabBar(highlightedSessionId: nil) { }
                 .environmentObject(store)
             Spacer()
         }

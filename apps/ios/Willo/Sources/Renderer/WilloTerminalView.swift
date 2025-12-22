@@ -767,6 +767,94 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         }
         onInput?(data)
     }
+
+    // MARK: - Thumbnail Capture
+
+    /// Capture the current Metal framebuffer as a UIImage
+    /// Returns a scaled-down thumbnail (1/4 size) for memory efficiency
+    func captureSnapshot() -> UIImage? {
+        guard let drawable = currentDrawable else {
+            print("[WilloTerminalView] captureSnapshot: No drawable available")
+            return nil
+        }
+        let texture = drawable.texture
+
+        // Get texture dimensions
+        let textureWidth = texture.width
+        let textureHeight = texture.height
+
+        // Scale down to 1/4 size for thumbnails
+        let thumbnailWidth = textureWidth / 4
+        let thumbnailHeight = textureHeight / 4
+
+        // Create a temporary texture descriptor for reading
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: textureWidth,
+            height: textureHeight,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .renderTarget]
+        descriptor.storageMode = .shared
+
+        // Read pixel data from the drawable texture
+        let bytesPerPixel = 4  // BGRA8Unorm
+        let bytesPerRow = bytesPerPixel * textureWidth
+        let dataSize = bytesPerRow * textureHeight
+        var pixelData = [UInt8](repeating: 0, count: dataSize)
+
+        // Get the texture data
+        let region = MTLRegionMake2D(0, 0, textureWidth, textureHeight)
+        texture.getBytes(
+            &pixelData,
+            bytesPerRow: bytesPerRow,
+            from: region,
+            mipmapLevel: 0
+        )
+
+        // Create a CGImage from the pixel data
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+            .union(.byteOrder32Little)
+
+        guard let dataProvider = CGDataProvider(
+            data: Data(pixelData) as CFData
+        ) else {
+            print("[WilloTerminalView] captureSnapshot: Failed to create data provider")
+            return nil
+        }
+
+        guard let cgImage = CGImage(
+            width: textureWidth,
+            height: textureHeight,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo,
+            provider: dataProvider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        ) else {
+            print("[WilloTerminalView] captureSnapshot: Failed to create CGImage")
+            return nil
+        }
+
+        // Scale down to thumbnail size using UIGraphicsImageRenderer
+        let thumbnailSize = CGSize(width: thumbnailWidth, height: thumbnailHeight)
+        let renderer = UIGraphicsImageRenderer(size: thumbnailSize)
+        let thumbnail = renderer.image { context in
+            // Flip the image (Metal textures are upside down)
+            context.cgContext.translateBy(x: 0, y: thumbnailSize.height)
+            context.cgContext.scaleBy(x: 1, y: -1)
+
+            // Draw the scaled image
+            context.cgContext.draw(cgImage, in: CGRect(origin: .zero, size: thumbnailSize))
+        }
+
+        return thumbnail
+    }
 }
 #else
 // macOS stub - the full implementation is iOS-only

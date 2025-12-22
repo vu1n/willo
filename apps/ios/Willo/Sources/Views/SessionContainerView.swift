@@ -9,8 +9,10 @@ struct SessionContainerView: View {
     @State private var showingSessionGrid = false
     @State private var swipeOffset: CGFloat = 0
     @State private var swipeDirection: SwipeDirection?
+    @State private var highlightedSessionId: UUID?
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @FocusState private var isFocused: Bool
 
     private enum SwipeDirection {
         case left, right
@@ -74,6 +76,13 @@ struct SessionContainerView: View {
             SessionGridView()
         }
         .gesture(pullDownGesture)
+        .focusable()
+        .focused($isFocused)
+        .onAppear {
+            isFocused = true
+        }
+        // Keyboard shortcuts
+        .background(keyboardShortcutHandlers)
     }
 
     // MARK: - Tab Bar
@@ -87,12 +96,12 @@ struct SessionContainerView: View {
     private var sessionTabBar: some View {
         if horizontalSizeClass == .compact {
             // Phone: compact dots
-            CompactSessionTabBar {
+            CompactSessionTabBar(highlightedSessionId: highlightedSessionId) {
                 showingNewSession = true
             }
         } else {
             // iPad: full tab bar
-            SessionTabBar {
+            SessionTabBar(highlightedSessionId: highlightedSessionId) {
                 showingNewSession = true
             }
         }
@@ -125,27 +134,35 @@ struct SessionContainerView: View {
                     // Swiping right from left edge → previous session
                     if value.translation.width > 0 {
                         swipeOffset = min(value.translation.width * 0.3, 50)
-                        if value.translation.width > threshold {
+                        if value.translation.width > threshold && swipeDirection != .right {
                             swipeDirection = .right
+                            // Haptic feedback when threshold is crossed
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
                         }
                     }
                 case .right:
                     // Swiping left from right edge → next session
                     if value.translation.width < 0 {
                         swipeOffset = max(value.translation.width * 0.3, -50)
-                        if value.translation.width < -threshold {
+                        if value.translation.width < -threshold && swipeDirection != .left {
                             swipeDirection = .left
+                            // Haptic feedback when threshold is crossed
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
                         }
                     }
                 }
             }
             .onEnded { value in
                 let threshold: CGFloat = 60
+                var didSwitch = false
 
                 switch edge {
                 case .left:
                     if value.translation.width > threshold {
                         // Switch to previous session
+                        didSwitch = true
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             sessionStore.previousSession()
                         }
@@ -153,10 +170,17 @@ struct SessionContainerView: View {
                 case .right:
                     if value.translation.width < -threshold {
                         // Switch to next session
+                        didSwitch = true
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             sessionStore.nextSession()
                         }
                     }
+                }
+
+                // Haptic feedback on successful session switch
+                if didSwitch {
+                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    impact.impactOccurred()
                 }
 
                 // Reset state
@@ -225,6 +249,114 @@ struct SessionContainerView: View {
                     }
             }
             .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+        }
+    }
+
+    // MARK: - Keyboard Shortcuts
+
+    @ViewBuilder
+    private var keyboardShortcutHandlers: some View {
+        Group {
+            // Cmd+1 through Cmd+9 - Switch to session by index
+            ForEach(1...9, id: \.self) { number in
+                Button("") {
+                    switchToSession(at: number - 1)
+                }
+                .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                .hidden()
+            }
+
+            // Cmd+N - New session
+            Button("") {
+                showingNewSession = true
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .hidden()
+
+            // Cmd+W - Close current session
+            Button("") {
+                closeCurrentSession()
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .hidden()
+
+            // Cmd+[ - Previous session
+            Button("") {
+                switchToPreviousSession()
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            .hidden()
+
+            // Cmd+] - Next session
+            Button("") {
+                switchToNextSession()
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            .hidden()
+        }
+    }
+
+    // MARK: - Keyboard Shortcut Actions
+
+    private func switchToSession(at index: Int) {
+        guard index < sessionStore.sessions.count else { return }
+        let session = sessionStore.sessions[index]
+
+        // Visual feedback - brief highlight
+        highlightSession(session.id)
+
+        // Switch to session with animation
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            sessionStore.setActiveSession(session.id)
+        }
+
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+    }
+
+    private func closeCurrentSession() {
+        guard let activeSessionId = sessionStore.activeSessionId else { return }
+
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+
+        // Close session
+        sessionStore.closeSession(activeSessionId)
+    }
+
+    private func switchToPreviousSession() {
+        guard sessionStore.sessions.count > 1 else { return }
+
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+
+        // Switch to previous
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            sessionStore.previousSession()
+        }
+    }
+
+    private func switchToNextSession() {
+        guard sessionStore.sessions.count > 1 else { return }
+
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+
+        // Switch to next
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            sessionStore.nextSession()
+        }
+    }
+
+    private func highlightSession(_ sessionId: UUID) {
+        highlightedSessionId = sessionId
+        // Clear highlight after brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            highlightedSessionId = nil
         }
     }
 }
@@ -538,19 +670,32 @@ struct SessionGridView: View {
 struct SessionGridCard: View {
     let session: WilloSession
     let action: () -> Void
+    @EnvironmentObject var sessionStore: SessionStore
+    @State private var refreshID = UUID()
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                // Thumbnail placeholder
-                Rectangle()
-                    .fill(Color.machineGray)
-                    .frame(height: 100)
-                    .overlay {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 24))
-                            .foregroundStyle(Color.textTertiary)
+                // Thumbnail or placeholder
+                Group {
+                    if let thumbnail = sessionStore.thumbnailManager.getThumbnail(for: session.id) {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(height: 100)
+                            .clipped()
+                    } else {
+                        Rectangle()
+                            .fill(Color.machineGray)
+                            .frame(height: 100)
+                            .overlay {
+                                Image(systemName: "terminal")
+                                    .font(.system(size: 24))
+                                    .foregroundStyle(Color.textTertiary)
+                            }
                     }
+                }
+                .id(refreshID)
 
                 // Color accent bar
                 Rectangle()
@@ -595,6 +740,12 @@ struct SessionGridCard: View {
             }
         }
         .buttonStyle(.plain)
+        .onReceive(sessionStore.thumbnailManager.$thumbnails) { thumbnails in
+            // Force refresh when thumbnails change for this session
+            if thumbnails[session.id] != nil {
+                refreshID = UUID()
+            }
+        }
     }
 }
 

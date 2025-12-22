@@ -18,16 +18,26 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     /// Callback for resize events
     var onResize: ((Int, Int) -> Void)?  // (cols, rows)
 
+    /// Session ID for thumbnail capture (optional)
+    var sessionId: UUID?
+
+    /// Thumbnail manager for capturing screenshots (optional)
+    var thumbnailManager: ThumbnailManager?
+
     init(
         transport: TerminalTransport? = nil,
         fontSize: CGFloat = 24.0,
         onInput: ((Data) -> Void)? = nil,
-        onResize: ((Int, Int) -> Void)? = nil
+        onResize: ((Int, Int) -> Void)? = nil,
+        sessionId: UUID? = nil,
+        thumbnailManager: ThumbnailManager? = nil
     ) {
         self.transport = transport
         self.fontSize = fontSize
         self.onInput = onInput
         self.onResize = onResize
+        self.sessionId = sessionId
+        self.thumbnailManager = thumbnailManager
     }
 
     /// Coordinator manages the data stream subscription
@@ -74,6 +84,13 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         // Start reading from transport if available
         if let transport = transport {
             startDataStream(transport: transport, context: context)
+        }
+
+        // Register with thumbnail manager if available
+        if let sessionId = sessionId, let thumbnailManager = thumbnailManager {
+            Task { @MainActor in
+                thumbnailManager.registerTerminalView(view, for: sessionId)
+            }
         }
 
         return view
@@ -152,6 +169,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
 struct SessionTerminalView: View {
     let session: TerminalSession
     @EnvironmentObject var appearanceSettings: AppearanceSettings
+    @EnvironmentObject var sessionStore: SessionStore
     @State private var currentSize: (cols: Int, rows: Int) = (80, 24)
     @State private var viewBounds: CGSize = .zero
 
@@ -170,7 +188,9 @@ struct SessionTerminalView: View {
                     Task {
                         try? await session.transport.resize(cols: UInt16(cols), rows: UInt16(rows))
                     }
-                }
+                },
+                sessionId: session.id,
+                thumbnailManager: sessionStore.thumbnailManager
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: geometry.size) { newSize in
