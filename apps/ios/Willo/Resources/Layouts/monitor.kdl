@@ -1,0 +1,16 @@
+// Willo Layout: Monitor
+// Best for: tablet, pc
+// Description: Stacked panes for monitoring multiple processes
+// Icon: square.stack.3d.up
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+    pane stacked=true {
+        pane name="server-1" focus=true
+        pane name="server-2"
+        pane name="server-3"
+        pane name="logs"
+    }
+}

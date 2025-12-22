@@ -1,0 +1,14 @@
+// Willo Layout: Split
+// Best for: tablet, pc
+// Description: Two panes - main workspace + output/logs
+// Icon: rectangle.split.2x1
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+    pane split_direction="horizontal" {
+        pane size="60%" focus=true name="main"
+        pane size="40%" name="output"
+    }
+}

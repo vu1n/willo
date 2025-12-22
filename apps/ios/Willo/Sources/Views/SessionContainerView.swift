@@ -269,9 +269,11 @@ struct NewSessionSheet: View {
     @State private var selectedProfileId: UUID?
     @State private var sessionName = ""
     @State private var selectedColor: SessionColor = .cyan
+    @State private var selectedLayoutId: String?
 
     /// Key for storing last selected profile
     private static let lastProfileKey = "lastSelectedProfileId"
+    private static let lastLayoutKey = "lastSelectedLayoutId"
 
     var body: some View {
         NavigationStack {
@@ -324,6 +326,18 @@ struct NewSessionSheet: View {
                         }
                     }
                 }
+
+                // Layout selection (only for zellij)
+                if selectedProfile?.multiplexer == .zellij {
+                    Section {
+                        InlineLayoutPicker(selectedLayoutId: $selectedLayoutId)
+                    } header: {
+                        Text("Layout")
+                    } footer: {
+                        Text("Zellij pane arrangement for this session")
+                            .font(.willoCaption)
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(Color.machineBlack)
@@ -349,6 +363,11 @@ struct NewSessionSheet: View {
         .presentationDetents([.medium, .large])
     }
 
+    private var selectedProfile: ServerProfile? {
+        guard let id = selectedProfileId else { return nil }
+        return appState.serverProfiles.first { $0.id == id }
+    }
+
     private func autoSelectProfile() {
         // Try to select last used profile
         if let lastIdString = UserDefaults.standard.string(forKey: Self.lastProfileKey),
@@ -359,6 +378,11 @@ struct NewSessionSheet: View {
         // Otherwise select first profile if only one exists
         else if appState.serverProfiles.count == 1 {
             selectedProfileId = appState.serverProfiles.first?.id
+        }
+
+        // Load last selected layout
+        if let lastLayoutId = UserDefaults.standard.string(forKey: Self.lastLayoutKey) {
+            selectedLayoutId = lastLayoutId
         }
     }
 
@@ -377,13 +401,19 @@ struct NewSessionSheet: View {
         // Use provided name or generate zellij-style random name
         let finalName = sessionName.isEmpty ? generateZellijStyleName() : sessionName
 
-        // Save last selected profile
+        // Save last selected profile and layout
         UserDefaults.standard.set(profileId.uuidString, forKey: Self.lastProfileKey)
+        if let layoutId = selectedLayoutId {
+            UserDefaults.standard.set(layoutId, forKey: Self.lastLayoutKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.lastLayoutKey)
+        }
 
         sessionStore.createSession(
             profile: profile,
             name: finalName,
-            color: selectedColor
+            color: selectedColor,
+            layoutId: selectedLayoutId
         )
         dismiss()
     }

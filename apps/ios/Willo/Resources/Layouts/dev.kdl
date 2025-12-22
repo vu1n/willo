@@ -1,0 +1,17 @@
+// Willo Layout: Dev
+// Best for: tablet, pc
+// Description: L-shape layout - editor + terminal + output
+// Icon: rectangle.split.3x1
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+    pane split_direction="vertical" {
+        pane size="65%" focus=true name="editor"
+        pane size="35%" split_direction="horizontal" {
+            pane size="50%" name="terminal"
+            pane size="50%" name="output"
+        }
+    }
+}

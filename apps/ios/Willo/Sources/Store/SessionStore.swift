@@ -113,13 +113,16 @@ final class SessionStore: ObservableObject {
         profile: ServerProfile,
         name: String,
         description: String = "",
-        color: SessionColor = .cyan
+        color: SessionColor = .cyan,
+        layoutId: String? = nil
     ) -> WilloSession {
         let session = WilloSession(
             serverProfile: profile,
             name: name,
             description: description,
-            color: color
+            color: color,
+            deviceOrigin: .current,
+            layoutId: layoutId
         )
         sessions.append(session)
 
@@ -216,7 +219,8 @@ final class SessionStore: ObservableObject {
         _ sessionId: UUID,
         name: String? = nil,
         description: String? = nil,
-        color: SessionColor? = nil
+        color: SessionColor? = nil,
+        layoutId: String?? = nil  // Double optional: nil = don't change, .some(nil) = clear, .some(value) = set
     ) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
 
@@ -229,7 +233,17 @@ final class SessionStore: ObservableObject {
         if let color = color {
             sessions[index].color = color
         }
+        if let layoutId = layoutId {
+            sessions[index].layoutId = layoutId
+        }
 
+        saveSessions()
+    }
+
+    /// Set layout for a session
+    func setLayout(_ sessionId: UUID, layoutId: String?) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[index].layoutId = layoutId
         saveSessions()
     }
 
@@ -331,7 +345,9 @@ final class SessionStore: ObservableObject {
                     connectionState: session.connectionState,
                     activityState: session.activityState,
                     createdAt: session.createdAt,
-                    lastActivityAt: session.lastActivityAt
+                    lastActivityAt: session.lastActivityAt,
+                    deviceOrigin: session.deviceOrigin,
+                    layoutId: session.layoutId
                 )
             } else if session.serverProfile.hostname.isEmpty {
                 // Profile was deleted or not found - mark for removal

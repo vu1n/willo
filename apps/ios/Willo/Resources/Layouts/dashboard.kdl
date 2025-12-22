@@ -1,0 +1,20 @@
+// Willo Layout: Dashboard
+// Best for: tablet, pc
+// Description: 4-pane grid for status overview
+// Icon: square.grid.2x2
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+    pane split_direction="horizontal" {
+        pane split_direction="vertical" {
+            pane name="top-left" focus=true
+            pane name="bottom-left"
+        }
+        pane split_direction="vertical" {
+            pane name="top-right"
+            pane name="bottom-right"
+        }
+    }
+}

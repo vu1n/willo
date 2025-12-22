@@ -1,0 +1,11 @@
+// Willo Layout: Focus
+// Best for: phone, tablet
+// Description: Single pane, distraction-free terminal
+// Icon: scope
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="compact-bar"
+    }
+    pane focus=true
+}

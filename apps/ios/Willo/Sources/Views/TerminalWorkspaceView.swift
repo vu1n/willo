@@ -146,18 +146,36 @@ struct TerminalWorkspaceView: View {
         // Only execute if multiplexer is configured
         guard profile.multiplexer != .none else { return }
 
+        // Check if we have a layout to apply
+        let willoSession = sessionStore.sessions.first { $0.id == workspace.id }
+        let layoutId = willoSession?.layoutId
+
+        // Small delay to let shell initialize
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+        // If we have a layout, write it to the server first
+        if let layoutId = layoutId,
+           let layout = LayoutTemplate.builtIn.first(where: { $0.id == layoutId }),
+           profile.multiplexer == .zellij {
+            await writeLayoutToServer(session: session, layout: layout)
+        }
+
         // Determine the command based on session name and profile behavior
-        // If we have a session name, always use it (namedSession behavior)
-        // This ensures the zellij session matches the Willo tab name
         let command: String?
         let sessionName = workspace.sessionName
 
         if !sessionName.isEmpty {
-            // We have a session name - use namedSession behavior to create/attach with that name
-            command = StartupBehavior.namedSession.command(
-                for: profile.multiplexer,
-                sessionName: sessionName
-            )
+            if let layoutId = layoutId, profile.multiplexer == .zellij {
+                // Use layout with session name (layout file is per-layout to avoid conflicts)
+                let layoutPath = "/tmp/willo-layout-\(layoutId).kdl"
+                command = "zellij --new-session-with-layout \(layoutPath) -s \"\(sessionName)\" 2>/dev/null || zellij attach -c \"\(sessionName)\""
+            } else {
+                // Standard namedSession behavior
+                command = StartupBehavior.namedSession.command(
+                    for: profile.multiplexer,
+                    sessionName: sessionName
+                )
+            }
         } else {
             // No session name - fall back to profile's startup behavior
             command = profile.startupBehavior.command(
@@ -170,12 +188,29 @@ struct TerminalWorkspaceView: View {
 
         print("[Terminal] Executing startup command: \(command)")
 
-        // Small delay to let shell initialize
-        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-
         // Send command with newline
         let commandData = Data((command + "\n").utf8)
         try? await session.transport.send(commandData)
+    }
+
+    /// Write a layout KDL file to the server (one file per layout ID to avoid conflicts)
+    private func writeLayoutToServer(session: TerminalSession, layout: LayoutTemplate) async {
+        let layoutPath = "/tmp/willo-layout-\(layout.id).kdl"
+
+        // Write layout file using heredoc (single-quoted delimiter avoids shell expansion)
+        let writeCommand = """
+        cat > \(layoutPath) << 'WILLO_LAYOUT_EOF'
+        \(layout.kdlContent)
+        WILLO_LAYOUT_EOF
+
+        """
+
+        print("[Terminal] Writing layout '\(layout.name)' to \(layoutPath)")
+        let commandData = Data(writeCommand.utf8)
+        try? await session.transport.send(commandData)
+
+        // Wait for file to be written
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
     }
 
     private func disconnect() async {

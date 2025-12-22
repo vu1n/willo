@@ -85,6 +85,9 @@ struct SessionTab: View {
                         .foregroundStyle(isActive ? Color.textPrimary : Color.textSecondary)
                         .lineLimit(1)
 
+                    // Device origin icon (subtle indicator)
+                    DeviceOriginBadge(device: session.deviceOrigin, isActive: isActive)
+
                     // Unread badge
                     if session.activityState.hasUnread {
                         UnreadBadge(count: session.activityState.unreadCount)
@@ -239,6 +242,21 @@ struct UnreadBadge: View {
                 Capsule()
                     .fill(Color.terminalRed)
             }
+    }
+}
+
+// MARK: - Device Origin Badge
+
+/// Small icon showing which device created the session
+struct DeviceOriginBadge: View {
+    let device: DeviceOrigin
+    let isActive: Bool
+
+    var body: some View {
+        Image(systemName: device.icon)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(isActive ? Color.textTertiary : Color.textTertiary.opacity(0.6))
+            .help("\(device.displayName) session")
     }
 }
 

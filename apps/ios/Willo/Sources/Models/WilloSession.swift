@@ -1,6 +1,203 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Device Origin
+
+/// Tracks which device type created a session
+enum DeviceOrigin: String, Codable, CaseIterable {
+    case phone
+    case tablet
+    case desktop
+
+    var icon: String {
+        switch self {
+        case .phone: return "iphone"
+        case .tablet: return "ipad"
+        case .desktop: return "desktopcomputer"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .phone: return "Phone"
+        case .tablet: return "Tablet"
+        case .desktop: return "Desktop"
+        }
+    }
+
+    /// Detect current device type
+    static var current: DeviceOrigin {
+        #if os(iOS)
+        switch UIDevice.current.userInterfaceIdiom {
+        case .phone: return .phone
+        case .pad: return .tablet
+        default: return .desktop
+        }
+        #else
+        return .desktop
+        #endif
+    }
+}
+
+// MARK: - Layout Template
+
+/// Represents a zellij layout template
+struct LayoutTemplate: Identifiable, Equatable {
+    let id: String  // filename without extension
+    let name: String
+    let description: String
+    let icon: String
+    let suitableFor: Set<DeviceOrigin>
+    let kdlContent: String
+
+    /// Built-in layout templates
+    static let builtIn: [LayoutTemplate] = [
+        LayoutTemplate(
+            id: "focus",
+            name: "Focus",
+            description: "Single pane, distraction-free",
+            icon: "scope",
+            suitableFor: [.phone, .tablet, .desktop],
+            kdlContent: """
+            layout {
+                pane size=1 borderless=true {
+                    plugin location="compact-bar"
+                }
+                pane focus=true
+            }
+            """
+        ),
+        LayoutTemplate(
+            id: "split",
+            name: "Split",
+            description: "Main workspace + output",
+            icon: "rectangle.split.2x1",
+            suitableFor: [.tablet, .desktop],
+            kdlContent: """
+            layout {
+                pane size=1 borderless=true {
+                    plugin location="compact-bar"
+                }
+                pane split_direction="horizontal" {
+                    pane size="60%" focus=true name="main"
+                    pane size="40%" name="output"
+                }
+            }
+            """
+        ),
+        LayoutTemplate(
+            id: "monitor",
+            name: "Monitor",
+            description: "Stacked panes for monitoring",
+            icon: "square.stack.3d.up",
+            suitableFor: [.tablet, .desktop],
+            kdlContent: """
+            layout {
+                pane size=1 borderless=true {
+                    plugin location="compact-bar"
+                }
+                pane stacked=true {
+                    pane name="server-1" focus=true
+                    pane name="server-2"
+                    pane name="server-3"
+                    pane name="logs"
+                }
+            }
+            """
+        ),
+        LayoutTemplate(
+            id: "dev",
+            name: "Dev",
+            description: "Editor + terminal + output",
+            icon: "rectangle.split.3x1",
+            suitableFor: [.tablet, .desktop],
+            kdlContent: """
+            layout {
+                pane size=1 borderless=true {
+                    plugin location="compact-bar"
+                }
+                pane split_direction="vertical" {
+                    pane size="65%" focus=true name="editor"
+                    pane size="35%" split_direction="horizontal" {
+                        pane size="50%" name="terminal"
+                        pane size="50%" name="output"
+                    }
+                }
+            }
+            """
+        ),
+        LayoutTemplate(
+            id: "dashboard",
+            name: "Dashboard",
+            description: "4-pane grid overview",
+            icon: "square.grid.2x2",
+            suitableFor: [.tablet, .desktop],
+            kdlContent: """
+            layout {
+                pane size=1 borderless=true {
+                    plugin location="compact-bar"
+                }
+                pane split_direction="horizontal" {
+                    pane split_direction="vertical" {
+                        pane name="top-left" focus=true
+                        pane name="bottom-left"
+                    }
+                    pane split_direction="vertical" {
+                        pane name="top-right"
+                        pane name="bottom-right"
+                    }
+                }
+            }
+            """
+        ),
+        LayoutTemplate(
+            id: "tabs-dev",
+            name: "Tabs Dev",
+            description: "Multi-tab: code, git, server",
+            icon: "rectangle.stack",
+            suitableFor: [.tablet, .desktop],
+            kdlContent: """
+            layout {
+                default_tab_template {
+                    pane size=1 borderless=true {
+                        plugin location="compact-bar"
+                    }
+                    children
+                }
+                tab name="code" focus=true {
+                    pane split_direction="vertical" {
+                        pane size="70%" name="editor"
+                        pane size="30%" name="terminal"
+                    }
+                }
+                tab name="git" {
+                    pane name="git"
+                }
+                tab name="server" {
+                    pane stacked=true {
+                        pane name="logs"
+                        pane name="processes"
+                    }
+                }
+            }
+            """
+        )
+    ]
+
+    /// Get layouts suitable for current device
+    static func forCurrentDevice() -> [LayoutTemplate] {
+        let current = DeviceOrigin.current
+        return builtIn.filter { $0.suitableFor.contains(current) }
+    }
+
+    /// Get layouts suitable for a specific device
+    static func forDevice(_ device: DeviceOrigin) -> [LayoutTemplate] {
+        builtIn.filter { $0.suitableFor.contains(device) }
+    }
+}
+
+// MARK: - Willo Session
+
 /// Represents a terminal session in Willo
 /// Each session corresponds to a multiplexer session (zellij/tmux) on a server
 struct WilloSession: Identifiable, Equatable {
@@ -13,6 +210,8 @@ struct WilloSession: Identifiable, Equatable {
     var activityState: ActivityState
     var createdAt: Date
     var lastActivityAt: Date
+    var deviceOrigin: DeviceOrigin
+    var layoutId: String?
 
     init(
         id: UUID = UUID(),
@@ -23,7 +222,9 @@ struct WilloSession: Identifiable, Equatable {
         connectionState: ConnectionState = .disconnected,
         activityState: ActivityState = .idle,
         createdAt: Date = Date(),
-        lastActivityAt: Date = Date()
+        lastActivityAt: Date = Date(),
+        deviceOrigin: DeviceOrigin = .current,
+        layoutId: String? = nil
     ) {
         self.id = id
         self.serverProfile = serverProfile
@@ -34,6 +235,8 @@ struct WilloSession: Identifiable, Equatable {
         self.activityState = activityState
         self.createdAt = createdAt
         self.lastActivityAt = lastActivityAt
+        self.deviceOrigin = deviceOrigin
+        self.layoutId = layoutId
     }
 
     /// Create from a server profile with auto-generated session name
@@ -145,6 +348,7 @@ enum ActivityState: Equatable {
 extension WilloSession: Codable {
     enum CodingKeys: String, CodingKey {
         case id, serverProfileId, name, description, color, createdAt, lastActivityAt
+        case deviceOrigin, layoutId
     }
 
     init(from decoder: Decoder) throws {
@@ -155,6 +359,8 @@ extension WilloSession: Codable {
         color = try container.decode(SessionColor.self, forKey: .color)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         lastActivityAt = try container.decode(Date.self, forKey: .lastActivityAt)
+        deviceOrigin = try container.decodeIfPresent(DeviceOrigin.self, forKey: .deviceOrigin) ?? .current
+        layoutId = try container.decodeIfPresent(String.self, forKey: .layoutId)
 
         // Server profile needs to be resolved separately
         // Store the profile ID in a placeholder profile for later resolution
@@ -178,5 +384,7 @@ extension WilloSession: Codable {
         try container.encode(color, forKey: .color)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(lastActivityAt, forKey: .lastActivityAt)
+        try container.encode(deviceOrigin, forKey: .deviceOrigin)
+        try container.encodeIfPresent(layoutId, forKey: .layoutId)
     }
 }
