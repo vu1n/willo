@@ -50,6 +50,13 @@ struct LayoutTemplate: Identifiable, Equatable {
     let suitableFor: Set<DeviceOrigin>
     let kdlContent: String
 
+    /// Short hash of content for cache invalidation (changes when layout is updated)
+    var contentHash: String {
+        // Simple hash using first 8 chars of content hash
+        let hash = kdlContent.utf8.reduce(0) { ($0 &* 31) &+ Int($1) }
+        return String(format: "%08x", abs(hash))
+    }
+
     /// Built-in layout templates
     static let builtIn: [LayoutTemplate] = [
         LayoutTemplate(

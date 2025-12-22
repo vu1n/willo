@@ -187,9 +187,11 @@ struct TerminalWorkspaceView: View {
         let sessionName = workspace.sessionName
 
         if !sessionName.isEmpty {
-            if let layoutId = layoutId, profile.multiplexer == .zellij {
-                // Use layout with session name (layout file is per-layout to avoid conflicts)
-                let layoutPath = "/tmp/willo-layout-\(layoutId).kdl"
+            if let layoutId = layoutId,
+               let layout = LayoutTemplate.builtIn.first(where: { $0.id == layoutId }),
+               profile.multiplexer == .zellij {
+                // Use layout with session name (versioned filename for cache invalidation)
+                let layoutPath = "/tmp/willo-layout-\(layout.id)-v\(layout.contentHash).kdl"
                 command = "zellij --new-session-with-layout \(layoutPath) -s \"\(sessionName)\" 2>/dev/null || zellij attach -c \"\(sessionName)\""
             } else {
                 // Standard namedSession behavior
@@ -215,23 +217,25 @@ struct TerminalWorkspaceView: View {
         try? await session.transport.send(commandData)
     }
 
-    /// Write a layout KDL file to the server (one file per layout ID to avoid conflicts)
+    /// Write a layout KDL file to the server (only if not already present)
+    /// Uses versioned filename based on content hash to handle app updates
     private func writeLayoutToServer(session: TerminalSession, layout: LayoutTemplate) async {
-        let layoutPath = "/tmp/willo-layout-\(layout.id).kdl"
+        let layoutPath = "/tmp/willo-layout-\(layout.id)-v\(layout.contentHash).kdl"
 
-        // Write layout file using heredoc (single-quoted delimiter avoids shell expansion)
+        // Only write if file doesn't exist (conditional write)
+        // This avoids rewriting on every connect while ensuring updates are applied
         let writeCommand = """
-        cat > \(layoutPath) << 'WILLO_LAYOUT_EOF'
+        [ -f \(layoutPath) ] || cat > \(layoutPath) << 'WILLO_LAYOUT_EOF'
         \(layout.kdlContent)
         WILLO_LAYOUT_EOF
 
         """
 
-        print("[Terminal] Writing layout '\(layout.name)' to \(layoutPath)")
+        print("[Terminal] Ensuring layout '\(layout.name)' exists at \(layoutPath)")
         let commandData = Data(writeCommand.utf8)
         try? await session.transport.send(commandData)
 
-        // Wait for file to be written
+        // Brief wait for file check/write
         try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
     }
 
