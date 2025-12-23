@@ -91,12 +91,14 @@ enum MultiplexerPreference: String, Codable, CaseIterable {
 enum StartupBehavior: String, Codable, CaseIterable {
     case bareShell      // Just connect, no multiplexer
     case attachLast     // Attach to most recent session, or create if none
+    case pickSession    // Show session picker (zellij's built-in UI)
     case namedSession   // Create/attach to session matching Willo tab name
 
     var displayName: String {
         switch self {
         case .bareShell: return "Bare Shell"
         case .attachLast: return "Attach/Create"
+        case .pickSession: return "Pick Session"
         case .namedSession: return "Named Session"
         }
     }
@@ -105,6 +107,7 @@ enum StartupBehavior: String, Codable, CaseIterable {
         switch self {
         case .bareShell: return "Just connect, no multiplexer"
         case .attachLast: return "Attach to existing or create new"
+        case .pickSession: return "Show list of existing sessions"
         case .namedSession: return "Session name matches tab label"
         }
     }
@@ -120,9 +123,15 @@ enum StartupBehavior: String, Codable, CaseIterable {
         case .attachLast:
             switch multiplexer {
             // Attach to last session, or create if none exists
-            // If multiple sessions exist, zellij will prompt user to pick
             case .zellij: return "zellij attach || zellij"
             case .tmux: return "tmux attach || tmux new-session"
+            case .none: return nil
+            }
+        case .pickSession:
+            switch multiplexer {
+            // Just run attach - zellij/tmux will show session picker if multiple exist
+            case .zellij: return "zellij attach"
+            case .tmux: return "tmux attach"
             case .none: return nil
             }
         case .namedSession:

@@ -108,6 +108,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Configure MTKView
         self.delegate = self
         self.colorPixelFormat = .bgra8Unorm
+        self.framebufferOnly = false  // Allow texture reads for thumbnail capture
         self.clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1.0)
         self.preferredFramesPerSecond = 60
         self.isPaused = true  // Don't use automatic render loop
