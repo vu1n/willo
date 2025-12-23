@@ -698,9 +698,60 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
+
+        // Send mouse press event to terminal
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: true)
+        }
+
         // Become first responder to show keyboard
         if !isFirstResponder {
             becomeFirstResponder()
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+
+        // Send mouse release event to terminal
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: false)
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+
+        // Send mouse drag event to terminal (button 0 + 32 for drag)
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: true, isDrag: true)
+        }
+    }
+
+    /// Convert tap location to terminal cell coordinates and send mouse event
+    private func sendMouseEvent(location: CGPoint, isPress: Bool, isDrag: Bool = false) {
+        // Convert point coordinates to cell coordinates
+        let col = Int(location.x / cellWidth) + 1  // 1-based
+        let row = Int(location.y / cellHeight) + 1  // 1-based
+
+        // Clamp to valid grid bounds
+        let clampedCol = max(1, min(col, cols))
+        let clampedRow = max(1, min(row, rows))
+
+        // SGR mouse encoding: CSI < button ; x ; y M/m
+        // M for press, m for release
+        // button: 0 = left click, 32 = drag
+        let button = isDrag ? 32 : 0
+        let suffix = isPress ? "M" : "m"
+        let sequence = "\u{1B}[<\(button);\(clampedCol);\(clampedRow)\(suffix)"
+
+        print("[Mouse] \(isDrag ? "Drag" : (isPress ? "Press" : "Release")) at (\(location.x), \(location.y)) -> cell (\(clampedCol), \(clampedRow)) -> \(sequence.debugDescription)")
+
+        if let data = sequence.data(using: .utf8) {
+            onInput?(data)
         }
     }
 

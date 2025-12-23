@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 struct TerminalWorkspaceView: View {
     let workspace: Workspace
@@ -11,7 +12,6 @@ struct TerminalWorkspaceView: View {
     @State private var sessionState: SessionState = .disconnected
     @State private var showingSettings = false
     @State private var showingCommandPalette = false
-    @State private var showingQuickActions = false
     @State private var showingSaveLayout = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
@@ -50,29 +50,8 @@ struct TerminalWorkspaceView: View {
             }
             .padding(.bottom, 56) // Above status bar height
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: voiceManager.state)
-
-            // Quick actions overlay (3-finger tap)
-            if showingQuickActions && sessionState == .connected {
-                ZellijQuickActionsOverlay(
-                    onAction: { action in
-                        executeZellijAction(action)
-                    },
-                    onDismiss: {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            showingQuickActions = false
-                        }
-                    }
-                )
-            }
         }
         .background(Color.machineBlack)
-        .overlay {
-            // 3-finger tap gesture recognizer (UIKit-based for proper multi-touch)
-            ThreeFingerTapGestureView {
-                handleThreeFingerTap()
-            }
-            .allowsHitTesting(sessionState == .connected && workspace.serverProfile.multiplexer == .zellij)
-        }
         .sheet(isPresented: $showingSettings) {
             TerminalSettingsSheet()
         }
@@ -275,13 +254,36 @@ struct TerminalWorkspaceView: View {
     }
 
     private func calculateTerminalSize() -> (cols: UInt16, rows: UInt16) {
-        // Cell dimensions must match GlyphAtlas calculation (based on actual font metrics)
-        // GlyphAtlas uses CoreText to get exact glyph dimensions
-        // For a rough estimate: cellWidth ≈ fontSize * 0.6, cellHeight ≈ fontSize * 1.35
-        // Use appearanceSettings.fontSize to match the actual renderer
+        // CRITICAL: Cell dimensions MUST match GlyphAtlas's actual font metrics
+        // GlyphAtlas uses CoreText to measure real glyph dimensions, not estimates
+        // We need to use the same calculation here to avoid size mismatches
         let fontSize = appearanceSettings.fontSize
-        let cellWidth: CGFloat = ceil(fontSize * 0.6)
-        let cellHeight: CGFloat = ceil(fontSize * 1.35)
+
+        // Use the SAME calculation as GlyphAtlas.setupFonts() for consistency
+        // Create a temporary font to get accurate metrics
+        let fontName = "JetBrainsMonoNerdFont-Regular"
+        let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
+
+        let ascent = CTFontGetAscent(font)
+        let descent = CTFontGetDescent(font)
+        let leading = CTFontGetLeading(font)
+
+        let cellHeight = ceil(ascent + descent + leading)
+
+        // Get advance width for 'M' using the same method as GlyphAtlas
+        var chars: [UniChar] = [0x4D] // 'M' character
+        var glyphs: [CGGlyph] = [0]
+        let gotGlyphs = CTFontGetGlyphsForCharacters(font, &chars, &glyphs, 1)
+
+        var advance: CGSize = .zero
+        let cellWidth: CGFloat
+        if gotGlyphs && glyphs[0] != 0 {
+            CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &advance, 1)
+            cellWidth = ceil(advance.width)
+        } else {
+            // Fallback to estimate (should never happen with system fonts)
+            cellWidth = ceil(fontSize * 0.6)
+        }
 
         var availableSize = CGSize(width: 800, height: 600)
 
@@ -301,37 +303,6 @@ struct TerminalWorkspaceView: View {
 
         print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), fontSize: \(fontSize), available: \(availableSize))")
         return (cols, rows)
-    }
-
-    // MARK: - Zellij Quick Actions
-
-    /// Execute a zellij action by sending the command to the terminal
-    private func executeZellijAction(_ action: ZellijAction) {
-        guard let session = session else { return }
-
-        Task {
-            // Send the zellij command with newline
-            let command = action.command + "\n"
-            let data = Data(command.utf8)
-            try? await session.transport.send(data)
-
-            print("[Terminal] Executed zellij action: \(action.command)")
-        }
-    }
-
-    /// Handle 3-finger tap gesture
-    private func handleThreeFingerTap() {
-        // Only show if connected and using zellij
-        guard sessionState == .connected,
-              workspace.serverProfile.multiplexer == .zellij else { return }
-
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            showingQuickActions = true
-        }
-
-        // Haptic feedback
-        let impact = UIImpactFeedbackGenerator(style: .medium)
-        impact.impactOccurred()
     }
 
     // MARK: - Layout Capture
