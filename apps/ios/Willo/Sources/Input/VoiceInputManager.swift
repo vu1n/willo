@@ -1,6 +1,8 @@
+#if os(iOS)
 import Foundation
 import Speech
 import AVFoundation
+import UIKit
 
 /// Manages voice input using Apple's Speech framework for on-device transcription
 @MainActor
@@ -610,3 +612,4 @@ struct VoiceTranscriptHUD: View {
     }
     .preferredColorScheme(.dark)
 }
+#endif

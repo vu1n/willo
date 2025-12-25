@@ -69,6 +69,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     /// Animation
     private var startTime: CFTimeInterval = 0
 
+    /// Frame coalescing - track last render time to prevent CPU thrashing
+    private var lastRenderTime: CFTimeInterval = 0
+    private var hasPendingRender: Bool = false
+
     /// Input callback - called when user types
     var onInput: ((Data) -> Void)?
 
@@ -110,7 +114,14 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         self.colorPixelFormat = .bgra8Unorm
         self.framebufferOnly = false  // Allow texture reads for thumbnail capture
         self.clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1.0)
-        self.preferredFramesPerSecond = 60
+
+        // Enable 120Hz on capable devices (iPad Pro)
+        if let window = self.window {
+            self.preferredFramesPerSecond = window.screen.maximumFramesPerSecond
+        } else {
+            self.preferredFramesPerSecond = 120  // Default to max, will be capped by hardware
+        }
+
         self.isPaused = true  // Don't use automatic render loop
         self.enableSetNeedsDisplay = true  // Only render when setNeedsDisplay() called
 
@@ -188,6 +199,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     /// Called when the view is added to a window - good time to auto-show keyboard
     override func didMoveToWindow() {
         super.didMoveToWindow()
+
+        // Update preferred frame rate based on screen capabilities
+        if let window = self.window {
+            self.preferredFramesPerSecond = window.screen.maximumFramesPerSecond
+            print("[Terminal] Updated frame rate to \(window.screen.maximumFramesPerSecond)Hz")
+        }
 
         // Auto-show software keyboard when no hardware keyboard is attached
         if window != nil && !hasHardwareKeyboard && shouldAutoShowKeyboard {
@@ -427,6 +444,41 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         print("[Terminal] ===== updateFontSize END =====")
     }
 
+    // MARK: - Frame Coalescing
+
+    /// Helper to trigger actual display update
+    private func triggerDisplay() {
+        super.setNeedsDisplay()
+    }
+
+    /// Override setNeedsDisplay to implement frame coalescing
+    /// Prevents CPU thrashing when data arrives faster than frame rate
+    override func setNeedsDisplay() {
+        let now = CACurrentMediaTime()
+        let minFrameInterval = 1.0 / 120.0  // Max 120 FPS
+
+        // If we already have a pending render scheduled, don't schedule another
+        guard !hasPendingRender else {
+            return
+        }
+
+        // If enough time has passed since last render, render immediately
+        if now - lastRenderTime >= minFrameInterval {
+            triggerDisplay()
+            lastRenderTime = now
+        } else {
+            // Schedule a deferred render after the minimum frame interval
+            hasPendingRender = true
+            let delay = minFrameInterval - (now - lastRenderTime)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self else { return }
+                self.hasPendingRender = false
+                self.lastRenderTime = CACurrentMediaTime()
+                self.triggerDisplay()
+            }
+        }
+    }
+
     // MARK: - MTKViewDelegate
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -473,6 +525,15 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
               let pipelineState = pipelineState,
               let drawable = currentDrawable,
               let renderPassDescriptor = currentRenderPassDescriptor else {
+            return
+        }
+
+        // Skip render if terminal hasn't changed
+        guard let terminal = terminal, terminal.checkDirty() else {
+            // Nothing to render - present empty drawable to maintain frame timing
+            guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
             return
         }
 
@@ -630,6 +691,9 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+
+        // Clear dirty flag after successful render
+        terminal.clearDirty()
     }
 
     // MARK: - Color Helpers
@@ -767,6 +831,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         commands.append(UIKeyCommand(input: UIKeyCommand.inputLeftArrow, modifierFlags: [], action: #selector(handleArrowLeft)))
         commands.append(UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: [], action: #selector(handleArrowRight)))
 
+        // Shift + Arrow keys (for selection)
+        commands.append(UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: .shift, action: #selector(handleShiftArrowUp)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: .shift, action: #selector(handleShiftArrowDown)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.inputLeftArrow, modifierFlags: .shift, action: #selector(handleShiftArrowLeft)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: .shift, action: #selector(handleShiftArrowRight)))
+
         // Escape key
         commands.append(UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(handleEscape)))
 
@@ -777,6 +847,37 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         for char in "abcdefghijklmnopqrstuvwxyz" {
             commands.append(UIKeyCommand(input: String(char), modifierFlags: .control, action: #selector(handleControlKey(_:))))
         }
+
+        // Alt/Option + letter combinations (a-z)
+        // Standard terminal behavior: Alt+key sends ESC followed by the key
+        for char in "abcdefghijklmnopqrstuvwxyz" {
+            commands.append(UIKeyCommand(input: String(char), modifierFlags: .alternate, action: #selector(handleAltKey(_:))))
+        }
+
+        // Function keys F1-F12
+        commands.append(UIKeyCommand(input: UIKeyCommand.f1, modifierFlags: [], action: #selector(handleF1)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f2, modifierFlags: [], action: #selector(handleF2)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f3, modifierFlags: [], action: #selector(handleF3)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f4, modifierFlags: [], action: #selector(handleF4)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f5, modifierFlags: [], action: #selector(handleF5)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f6, modifierFlags: [], action: #selector(handleF6)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f7, modifierFlags: [], action: #selector(handleF7)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f8, modifierFlags: [], action: #selector(handleF8)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f9, modifierFlags: [], action: #selector(handleF9)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f10, modifierFlags: [], action: #selector(handleF10)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f11, modifierFlags: [], action: #selector(handleF11)))
+        commands.append(UIKeyCommand(input: UIKeyCommand.f12, modifierFlags: [], action: #selector(handleF12)))
+
+        // Special navigation keys
+        if #available(iOS 13.4, *) {
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputHome, modifierFlags: [], action: #selector(handleHome)))
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputEnd, modifierFlags: [], action: #selector(handleEnd)))
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputPageUp, modifierFlags: [], action: #selector(handlePageUp)))
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputPageDown, modifierFlags: [], action: #selector(handlePageDown)))
+        }
+
+        // Delete key (forward delete, not backspace)
+        commands.append(UIKeyCommand(input: UIKeyCommand.inputDelete, modifierFlags: [], action: #selector(handleDelete)))
 
         return commands
     }
@@ -819,6 +920,114 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         }
         onInput?(data)
     }
+
+    /// Handle Alt/Option + key combinations
+    /// Standard terminal behavior: sends ESC followed by the character
+    @objc private func handleAltKey(_ command: UIKeyCommand) {
+        guard let input = command.input, let char = input.first else { return }
+        // Alt+key sends ESC (0x1B) followed by the character
+        var data = Data([0x1B])  // ESC
+        if let charData = String(char).data(using: .utf8) {
+            data.append(charData)
+        }
+        onInput?(data)
+    }
+
+    // Shift + Arrow keys (for selection in terminal)
+    @objc private func handleShiftArrowUp() {
+        sendEscapeSequence("[1;2A")
+    }
+
+    @objc private func handleShiftArrowDown() {
+        sendEscapeSequence("[1;2B")
+    }
+
+    @objc private func handleShiftArrowRight() {
+        sendEscapeSequence("[1;2C")
+    }
+
+    @objc private func handleShiftArrowLeft() {
+        sendEscapeSequence("[1;2D")
+    }
+
+    // Function keys F1-F12 (ANSI sequences)
+    @objc private func handleF1() {
+        sendEscapeSequence("[11~")
+    }
+
+    @objc private func handleF2() {
+        sendEscapeSequence("[12~")
+    }
+
+    @objc private func handleF3() {
+        sendEscapeSequence("[13~")
+    }
+
+    @objc private func handleF4() {
+        sendEscapeSequence("[14~")
+    }
+
+    @objc private func handleF5() {
+        sendEscapeSequence("[15~")
+    }
+
+    @objc private func handleF6() {
+        sendEscapeSequence("[17~")
+    }
+
+    @objc private func handleF7() {
+        sendEscapeSequence("[18~")
+    }
+
+    @objc private func handleF8() {
+        sendEscapeSequence("[19~")
+    }
+
+    @objc private func handleF9() {
+        sendEscapeSequence("[20~")
+    }
+
+    @objc private func handleF10() {
+        sendEscapeSequence("[21~")
+    }
+
+    @objc private func handleF11() {
+        sendEscapeSequence("[23~")
+    }
+
+    @objc private func handleF12() {
+        sendEscapeSequence("[24~")
+    }
+
+    // Special navigation keys
+    @objc private func handleHome() {
+        sendEscapeSequence("[H")
+    }
+
+    @objc private func handleEnd() {
+        sendEscapeSequence("[F")
+    }
+
+    @objc private func handlePageUp() {
+        sendEscapeSequence("[5~")
+    }
+
+    @objc private func handlePageDown() {
+        sendEscapeSequence("[6~")
+    }
+
+    @objc private func handleDelete() {
+        sendEscapeSequence("[3~")
+    }
+
+    // TODO: IME Support for CJK Input
+    // Full UITextInput protocol conformance is needed for proper CJK (Chinese, Japanese, Korean) input.
+    // This requires implementing:
+    // - UITextInput protocol methods (textIn/textRange/marked text handling)
+    // - UITextInputDelegate for composition events
+    // - Proper handling of multi-stage character composition
+    // - Integration with iOS Input Method Editors (IME)
+    // Reference: https://developer.apple.com/documentation/uikit/uitextinput
 
     // MARK: - Thumbnail Capture
 

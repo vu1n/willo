@@ -8,6 +8,7 @@ struct TerminalWorkspaceView: View {
     @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var layoutStore: LayoutStore
     @EnvironmentObject var appearanceSettings: AppearanceSettings
+    @Environment(\.scenePhase) private var scenePhase
     @State private var session: TerminalSession?
     @State private var sessionState: SessionState = .disconnected
     @State private var showingSettings = false
@@ -15,6 +16,7 @@ struct TerminalWorkspaceView: View {
     @State private var showingSaveLayout = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
+    @StateObject private var networkMonitor = NetworkMonitor.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -82,6 +84,21 @@ struct TerminalWorkspaceView: View {
         .task {
             await connect()
         }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            if newPhase == .active && oldPhase == .background {
+                Task {
+                    await reconnectIfNeeded()
+                }
+            }
+        }
+        .onChange(of: networkMonitor.isConnected) { wasConnected, isNowConnected in
+            if isNowConnected && !wasConnected {
+                // Network restored
+                Task {
+                    await reconnectIfNeeded()
+                }
+            }
+        }
         .alert("Connection Error", isPresented: .init(
             get: { connectionError != nil },
             set: { if !$0 { connectionError = nil } }
@@ -110,48 +127,67 @@ struct TerminalWorkspaceView: View {
             return
         }
 
-        sessionState = .connecting
-        do {
-            let terminalSize = calculateTerminalSize()
+        // Use connectWithRetry for new connections
+        await connectWithRetry(maxAttempts: 3)
+    }
 
-            var config = SessionConfig(
-                name: workspace.sessionName,
-                host: workspace.serverProfile.hostname,
-                port: UInt16(workspace.serverProfile.port),
-                username: workspace.serverProfile.username,
-                connectionType: workspace.serverProfile.preferMosh ? .mosh : .ssh,
-                authMethod: workspace.serverProfile.authMethodConfig
-            )
-            config.terminalCols = terminalSize.cols
-            config.terminalRows = terminalSize.rows
-            print("[Terminal] Connecting with size: \(terminalSize.cols)x\(terminalSize.rows)")
+    private func connectWithRetry(maxAttempts: Int = 3) async {
+        let backoff = ExponentialBackoff()
 
-            let newSession: TerminalSession
-            if workspace.serverProfile.preferMosh {
-                newSession = try await sessionManager.createMoshSession(config: config)
-            } else {
-                newSession = try await sessionManager.createSession(config: config)
+        for attempt in 1...maxAttempts {
+            sessionState = attempt == 1 ? .connecting : .reconnecting(attempt: attempt)
+
+            do {
+                let terminalSize = calculateTerminalSize()
+
+                var config = SessionConfig(
+                    name: workspace.sessionName,
+                    host: workspace.serverProfile.hostname,
+                    port: UInt16(workspace.serverProfile.port),
+                    username: workspace.serverProfile.username,
+                    connectionType: workspace.serverProfile.preferMosh ? .mosh : .ssh,
+                    authMethod: workspace.serverProfile.authMethodConfig
+                )
+                config.terminalCols = terminalSize.cols
+                config.terminalRows = terminalSize.rows
+                print("[Terminal] Connecting with size: \(terminalSize.cols)x\(terminalSize.rows)")
+
+                let newSession: TerminalSession
+                if workspace.serverProfile.preferMosh {
+                    newSession = try await sessionManager.createMoshSession(config: config)
+                } else {
+                    newSession = try await sessionManager.createSession(config: config)
+                }
+
+                self.session = newSession
+                try await sessionManager.connect(newSession)
+                sessionState = .connected
+
+                // Cache the session for tab switching
+                sessionStore.setTerminalSession(newSession, for: workspace.id)
+                print("[Terminal] Cached session for workspace \(workspace.id)")
+
+                // Execute startup command based on profile configuration
+                await executeStartupCommand(session: newSession)
+
+                // Send resize after connection to ensure remote session has correct size
+                // This is especially important when reconnecting to existing zellij/tmux sessions
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for shell/multiplexer to initialize
+                try? await newSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
+                print("[Terminal] Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
+
+                // Success - return early
+                return
+            } catch {
+                if attempt < maxAttempts {
+                    let delay = backoff.delay(for: attempt)
+                    print("[Terminal] Connection attempt \(attempt) failed, retrying in \(delay)s...")
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                } else {
+                    sessionState = .error(error)
+                    self.connectionError = error
+                }
             }
-
-            self.session = newSession
-            try await sessionManager.connect(newSession)
-            sessionState = .connected
-
-            // Cache the session for tab switching
-            sessionStore.setTerminalSession(newSession, for: workspace.id)
-            print("[Terminal] Cached session for workspace \(workspace.id)")
-
-            // Execute startup command based on profile configuration
-            await executeStartupCommand(session: newSession)
-
-            // Send resize after connection to ensure remote session has correct size
-            // This is especially important when reconnecting to existing zellij/tmux sessions
-            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for shell/multiplexer to initialize
-            try? await newSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
-            print("[Terminal] Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
-        } catch {
-            sessionState = .error(error)
-            self.connectionError = error
         }
     }
 
@@ -251,6 +287,19 @@ struct TerminalWorkspaceView: View {
         try? await sessionManager.disconnect(session)
         self.session = nil
         sessionState = .disconnected
+    }
+
+    private func reconnectIfNeeded() async {
+        // Check if we have a session that claims to be connected
+        guard let session = self.session else { return }
+
+        // Verify the transport is still alive
+        let currentState = await session.transport.state
+        if currentState != .connected {
+            print("[Terminal] Session disconnected while in background, reconnecting...")
+            sessionState = .reconnecting(attempt: 1)
+            await connect()
+        }
     }
 
     private func calculateTerminalSize() -> (cols: UInt16, rows: UInt16) {
@@ -484,7 +533,7 @@ extension SessionState {
         case .disconnected: return "Disconnected"
         case .connecting: return "Connecting"
         case .connected: return "Connected"
-        case .reconnecting: return "Reconnecting"
+        case .reconnecting(let attempt): return "Reconnecting (\(attempt))"
         case .error: return "Error"
         }
     }
@@ -514,8 +563,8 @@ struct TerminalContainerView: View {
             if let session = session {
                 SessionTerminalView(session: session)
 
-                if case .reconnecting = session.state {
-                    ReconnectingOverlay(attempt: 1)
+                if case .reconnecting(let attempt) = session.state {
+                    ReconnectingOverlay(attempt: attempt)
                 }
             } else {
                 ConnectingView()

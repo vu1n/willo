@@ -31,7 +31,9 @@ final class SessionStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     /// Thumbnail manager for capturing terminal screenshots
+    #if os(iOS)
     let thumbnailManager = ThumbnailManager()
+    #endif
 
     /// Cloud sync manager
     private let cloudSync = CloudSyncManager.shared
@@ -212,7 +214,9 @@ final class SessionStore: ObservableObject {
         }
 
         // Clean up thumbnail
+        #if os(iOS)
         thumbnailManager.unregisterTerminalView(for: sessionId)
+        #endif
 
         sessions.removeAll { $0.id == sessionId }
 

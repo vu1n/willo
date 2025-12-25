@@ -142,7 +142,9 @@ struct SaveLayoutSheet: View {
                 ScanLinesView(opacity: 0.015)
                     .allowsHitTesting(false)
             }
+            #if os(iOS)
             .navigationBarHidden(true)
+            #endif
         }
         .preferredColorScheme(.dark)
         .onAppear {

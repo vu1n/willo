@@ -1,4 +1,6 @@
+#if os(iOS)
 import SwiftUI
+import UIKit
 
 /// Container view that displays session tabs and the active terminal
 struct SessionContainerView: View {
@@ -778,3 +780,4 @@ extension ActivityState {
         .environmentObject(AppState())
         .environmentObject(SessionStore())
 }
+#endif

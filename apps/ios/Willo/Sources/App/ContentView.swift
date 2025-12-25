@@ -1,3 +1,4 @@
+#if os(iOS)
 import SwiftUI
 
 struct ContentView: View {
@@ -76,3 +77,4 @@ struct ContentView: View {
         .environmentObject(AppState())
         .environmentObject(SessionStore())
 }
+#endif

@@ -261,16 +261,17 @@ enum SessionState: Equatable {
     case disconnected
     case connecting
     case connected
-    case reconnecting
+    case reconnecting(attempt: Int)
     case error(Error)
 
     static func == (lhs: SessionState, rhs: SessionState) -> Bool {
         switch (lhs, rhs) {
         case (.disconnected, .disconnected),
              (.connecting, .connecting),
-             (.connected, .connected),
-             (.reconnecting, .reconnecting):
+             (.connected, .connected):
             return true
+        case (.reconnecting(let a), .reconnecting(let b)):
+            return a == b
         case (.error, .error):
             return true
         default:

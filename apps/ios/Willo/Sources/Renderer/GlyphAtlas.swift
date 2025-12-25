@@ -302,6 +302,37 @@ final class GlyphAtlas {
         return renderGlyph(key: key)
     }
 
+    // MARK: - Atlas Management
+
+    /// Reset the atlas when it's full
+    /// Clears all cached glyphs and re-populates ASCII characters
+    private func resetAtlas() {
+        print("GlyphAtlas: Resetting atlas - clearing \(glyphCache.count) cached glyphs")
+
+        // Clear the glyph cache
+        glyphCache.removeAll()
+
+        // Reset packing position
+        packX = 2
+        packY = 2
+        rowHeight = 0
+
+        // Clear the texture to transparent
+        if let texture = texture {
+            let zeros = [UInt8](repeating: 0, count: atlasWidth * atlasHeight)
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, atlasWidth, atlasHeight),
+                mipmapLevel: 0,
+                withBytes: zeros,
+                bytesPerRow: atlasWidth
+            )
+        }
+
+        // Re-populate ASCII characters
+        prepopulateASCII()
+        print("GlyphAtlas: Reset complete, \(glyphCache.count) glyphs re-populated")
+    }
+
     // MARK: - Glyph Rendering
 
     private func renderGlyph(key: GlyphKey) -> GlyphInfo? {
@@ -346,9 +377,15 @@ final class GlyphAtlas {
 
         // Check if atlas is full
         if packY + glyphHeight > atlasHeight {
-            // TODO: Implement LRU eviction or atlas expansion
-            print("GlyphAtlas: Atlas full, cannot add glyph \(key.codepoint)")
-            return nil
+            // Atlas full - reset and re-populate essentials
+            print("GlyphAtlas: Atlas full, resetting...")
+            resetAtlas()
+            // Try again after reset - use same position calculation
+            if packX + glyphWidth > atlasWidth {
+                packX = 2
+                packY = 2
+                rowHeight = 0
+            }
         }
 
         rowHeight = max(rowHeight, glyphHeight)

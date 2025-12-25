@@ -1,6 +1,8 @@
+#if os(iOS)
 import Foundation
 import SwiftUI
 import Combine
+import UIKit
 
 /// Manages thumbnail capture and storage for terminal sessions
 ///
@@ -164,3 +166,4 @@ final class ThumbnailManager: ObservableObject {
         }
     }
 }
+#endif
