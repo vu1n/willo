@@ -308,9 +308,13 @@ struct TerminalWorkspaceView: View {
         // We need to use the same calculation here to avoid size mismatches
         let fontSize = appearanceSettings.fontSize
 
+        // Ensure bundled fonts are registered before we try to use them
+        GlyphAtlas.ensureFontsRegistered()
+
         // Use the SAME calculation as GlyphAtlas.setupFonts() for consistency
         // Create a temporary font to get accurate metrics
-        let fontName = "JetBrainsMonoNerdFont-Regular"
+        // NOTE: Must use PostScript name, not filename! The font's PS name is "JetBrainsMonoNF-Regular"
+        let fontName = "JetBrainsMonoNF-Regular"
         let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
 
         let ascent = CTFontGetAscent(font)

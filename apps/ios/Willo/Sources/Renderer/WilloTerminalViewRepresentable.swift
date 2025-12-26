@@ -139,8 +139,11 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
             moshTransport.setDataCallback { [weak coordinator] data in
                 // Must dispatch to main thread since callback comes from background
                 DispatchQueue.main.async {
+                    print("[TerminalView] Mosh data received: \(data.count) bytes, coordinator=\(coordinator != nil), view=\(coordinator?.terminalView != nil)")
                     if let view = coordinator?.terminalView {
                         view.feed(data)
+                    } else {
+                        print("[TerminalView] ERROR: terminalView is nil!")
                     }
                     // Process activity detection
                     Self.processActivityDetection(
@@ -156,8 +159,11 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
             sshTransport.setDataCallback { [weak coordinator] data in
                 // Must dispatch to main thread since callback comes from NIO event loop
                 DispatchQueue.main.async {
+                    print("[TerminalView] SSH data received: \(data.count) bytes, coordinator=\(coordinator != nil), view=\(coordinator?.terminalView != nil)")
                     if let view = coordinator?.terminalView {
                         view.feed(data)
+                    } else {
+                        print("[TerminalView] ERROR: terminalView is nil!")
                     }
                     // Process activity detection
                     Self.processActivityDetection(

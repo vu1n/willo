@@ -74,6 +74,12 @@ final class GlyphAtlas {
     /// Static flag to ensure fonts are only registered once
     private static var fontsRegistered = false
 
+    /// Ensure bundled fonts are registered. Call this before using font metrics.
+    /// Safe to call multiple times - will only register once.
+    static func ensureFontsRegistered() {
+        registerBundledFonts()
+    }
+
     init(device: MTLDevice, fontSize: CGFloat = 24.0) {
         self.device = device
         self.fontSize = fontSize

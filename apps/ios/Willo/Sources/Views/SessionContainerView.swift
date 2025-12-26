@@ -495,6 +495,7 @@ struct NewSessionSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .preferredColorScheme(.dark)
     }
 
     private var selectedProfile: ServerProfile? {

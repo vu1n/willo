@@ -73,6 +73,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     private var lastRenderTime: CFTimeInterval = 0
     private var hasPendingRender: Bool = false
 
+    /// Force render flag - ensures render happens after data feed
+    /// This bypasses the native dirty check which can miss updates
+    private var needsRender: Bool = true
+
     /// Input callback - called when user types
     var onInput: ((Data) -> Void)?
 
@@ -84,6 +88,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Whether we should auto-show the software keyboard
     private var shouldAutoShowKeyboard: Bool = true
+
+    /// Scroll accumulator for mouse wheel emulation
+    private var scrollAccumulator: CGFloat = 0
+
+    /// Threshold for triggering a scroll event (in points)
+    private let scrollThreshold: CGFloat = 20.0
 
     // MARK: - Initialization
 
@@ -155,6 +165,9 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Setup hardware keyboard detection
         setupKeyboardDetection()
 
+        // Setup scroll gesture for TUI mouse wheel support
+        setupScrollGesture()
+
         // Trigger initial render
         setNeedsDisplay()
     }
@@ -193,6 +206,81 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
             DispatchQueue.main.async { [weak self] in
                 self?.becomeFirstResponder()
             }
+        }
+    }
+
+    private func setupScrollGesture() {
+        // Two-finger pan gesture for scroll wheel emulation
+        let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
+        panGesture.minimumNumberOfTouches = 2
+        panGesture.maximumNumberOfTouches = 2
+        addGestureRecognizer(panGesture)
+    }
+
+    @objc private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
+        guard let terminal = terminal else { return }
+
+        let translation = gesture.translation(in: self)
+
+        switch gesture.state {
+        case .began:
+            scrollAccumulator = 0
+
+        case .changed:
+            // Accumulate vertical scroll
+            scrollAccumulator += translation.y
+            gesture.setTranslation(.zero, in: self)
+
+            // Check if we've crossed the threshold
+            while abs(scrollAccumulator) >= scrollThreshold {
+                let modes = terminal.getModes()
+                let isScrollUp = scrollAccumulator < 0
+
+                if modes.altScreen && modes.mouseAlternateScroll {
+                    // In alternate screen with alternate scroll enabled:
+                    // Send arrow keys instead of scroll events
+                    if isScrollUp {
+                        sendEscapeSequence("[A") // Up arrow
+                    } else {
+                        sendEscapeSequence("[B") // Down arrow
+                    }
+                } else if modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
+                    // Mouse tracking enabled: send SGR mouse wheel events
+                    // Button 64 = wheel up, 65 = wheel down
+                    let button = isScrollUp ? 64 : 65
+                    let col = max(1, cols / 2)  // Center of terminal
+                    let row = max(1, rows / 2)
+
+                    if modes.mouseFormatSGR {
+                        // SGR format: CSI < button ; col ; row M
+                        let sequence = "\u{1B}[<\(button);\(col);\(row)M"
+                        if let data = sequence.data(using: .utf8) {
+                            onInput?(data)
+                        }
+                    } else {
+                        // Legacy format (less common now)
+                        let sequence = "\u{1B}[M\(Character(UnicodeScalar(32 + button)!))\(Character(UnicodeScalar(32 + col)!))\(Character(UnicodeScalar(32 + row)!))"
+                        if let data = sequence.data(using: .utf8) {
+                            onInput?(data)
+                        }
+                    }
+                }
+                // Note: If no mouse mode and not in alt screen, we could implement
+                // scrollback here, but that's a separate feature
+
+                // Consume the threshold amount
+                if isScrollUp {
+                    scrollAccumulator += scrollThreshold
+                } else {
+                    scrollAccumulator -= scrollThreshold
+                }
+            }
+
+        case .ended, .cancelled:
+            scrollAccumulator = 0
+
+        default:
+            break
         }
     }
 
@@ -354,8 +442,11 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Feed data to the terminal (ANSI sequences, UTF-8 text)
     func feed(_ data: Data) {
+        print("[TerminalView] feed() called with \(data.count) bytes, metalAvailable=\(metalAvailable), pipelineState=\(pipelineState != nil)")
         terminal?.feed(data)
         updateCellsFromTerminal()
+        print("[TerminalView] After feed: cells.count=\(cells.count), grid=\(cols)x\(rows)")
+        needsRender = true
         setNeedsDisplay()
     }
 
@@ -363,6 +454,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     func feed(_ string: String) {
         terminal?.feed(string)
         updateCellsFromTerminal()
+        needsRender = true
         setNeedsDisplay()
     }
 
@@ -379,6 +471,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         terminal?.resize(rows: rows, cols: cols)
         updateCellsFromTerminal()
+        needsRender = true
         setNeedsDisplay()
 
         // Notify transport of resize
@@ -502,8 +595,14 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     func draw(in view: MTKView) {
+        // Don't render if view bounds are invalid (prevents drawable allocation failures)
+        guard bounds.width > 0 && bounds.height > 0 else {
+            return
+        }
+
         // If Metal rendering isn't available, just clear the view
         guard metalAvailable else {
+            print("[TerminalView] draw() - Metal not available!")
             // Fallback: Just present a cleared drawable
             guard let drawable = currentDrawable,
                   let commandQueue = commandQueue,
@@ -522,20 +621,39 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         guard let device = device,
               let commandQueue = commandQueue,
-              let pipelineState = pipelineState,
-              let drawable = currentDrawable,
-              let renderPassDescriptor = currentRenderPassDescriptor else {
+              let pipelineState = pipelineState else {
+            return
+        }
+
+        // Check drawable availability separately to provide better diagnostics
+        guard let drawable = currentDrawable else {
+            print("[TerminalView] draw() - No drawable available, bounds=\(bounds.size)")
+            return
+        }
+
+        guard let renderPassDescriptor = currentRenderPassDescriptor else {
             return
         }
 
         // Skip render if terminal hasn't changed
-        guard let terminal = terminal, terminal.checkDirty() else {
+        // Use both native dirty flag and Swift needsRender flag for reliability
+        guard let terminal = terminal else {
+            // No terminal - present empty drawable
+            guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+            return
+        }
+
+        let nativeDirty = terminal.checkDirty()
+        guard nativeDirty || needsRender else {
             // Nothing to render - present empty drawable to maintain frame timing
             guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
             commandBuffer.present(drawable)
             commandBuffer.commit()
             return
         }
+        needsRender = false  // Clear our flag
 
         // Scale factor to convert points to pixels
         let scale = contentScaleFactor
@@ -755,6 +873,41 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         onInput?(backspace)
     }
 
+    /// Handle paste with bracketed paste mode support
+    override func paste(_ sender: Any?) {
+        guard let string = UIPasteboard.general.string else { return }
+        pasteString(string)
+    }
+
+    /// Paste a string, wrapping with bracketed paste sequences if mode is enabled
+    func pasteString(_ string: String) {
+        guard let terminal = terminal else {
+            // No terminal, just send raw
+            if let data = string.data(using: .utf8) {
+                onInput?(data)
+            }
+            return
+        }
+
+        let modes = terminal.getModes()
+
+        if modes.bracketedPaste {
+            // Wrap paste with bracketed paste sequences
+            // CSI 200 ~ ... CSI 201 ~
+            let startBracket = "\u{1B}[200~"
+            let endBracket = "\u{1B}[201~"
+            let wrapped = startBracket + string + endBracket
+            if let data = wrapped.data(using: .utf8) {
+                onInput?(data)
+            }
+        } else {
+            // Regular paste
+            if let data = string.data(using: .utf8) {
+                onInput?(data)
+            }
+        }
+    }
+
     // MARK: - First Responder
 
     override var canBecomeFirstResponder: Bool {
@@ -848,6 +1001,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
             commands.append(UIKeyCommand(input: String(char), modifierFlags: .control, action: #selector(handleControlKey(_:))))
         }
 
+        // Command + V for paste (with bracketed paste support)
+        commands.append(UIKeyCommand(input: "v", modifierFlags: .command, action: #selector(handlePaste)))
+
+        // Command + C for copy (if selection exists, otherwise send Ctrl+C)
+        commands.append(UIKeyCommand(input: "c", modifierFlags: .command, action: #selector(handleCopy)))
+
         // Alt/Option + letter combinations (a-z)
         // Standard terminal behavior: Alt+key sends ESC followed by the key
         for char in "abcdefghijklmnopqrstuvwxyz" {
@@ -904,6 +1063,16 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     @objc private func handleTab() {
         onInput?(Data([0x09]))  // TAB
+    }
+
+    @objc private func handlePaste() {
+        paste(nil)
+    }
+
+    @objc private func handleCopy() {
+        // TODO: If text selection is implemented, copy selection here
+        // For now, send Ctrl+C (interrupt) to the terminal
+        onInput?(Data([0x03]))  // Ctrl+C
     }
 
     @objc private func handleControlKey(_ command: UIKeyCommand) {

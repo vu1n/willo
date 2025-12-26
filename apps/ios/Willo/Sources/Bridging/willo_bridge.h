@@ -62,6 +62,19 @@ typedef struct {
     uint8_t _padding[2];    ///< Alignment padding
 } WilloTerminalInfo;
 
+/// Terminal modes that Swift needs to query for proper input handling
+typedef struct {
+    bool bracketed_paste;       ///< CSI ?2004h - wrap paste with escape sequences
+    bool focus_event;           ///< CSI ?1004h - send focus in/out events
+    bool mouse_alternate_scroll; ///< CSI ?1007h - send arrow keys for scroll in alt screen
+    bool mouse_event_normal;    ///< CSI ?1000h - normal mouse tracking
+    bool mouse_event_button;    ///< CSI ?1002h - button event tracking
+    bool mouse_event_any;       ///< CSI ?1003h - any event tracking
+    bool mouse_format_sgr;      ///< CSI ?1006h - SGR extended mouse format
+    bool alt_screen;            ///< CSI ?1049h - alternate screen buffer active
+    uint8_t _padding[7];        ///< Alignment padding
+} WilloTerminalModes;
+
 // =============================================================================
 // MARK: - Opaque Terminal Handle
 // =============================================================================
@@ -131,6 +144,11 @@ bool willo_term_is_dirty(WilloTerminal* term);
 /// Clear the dirty flag. Call after rendering.
 /// @param term Terminal handle
 void willo_term_clear_dirty(WilloTerminal* term);
+
+/// Get terminal modes for input handling (bracketed paste, focus events, etc.)
+/// @param term Terminal handle
+/// @param out_modes Pointer to WilloTerminalModes struct to fill
+void willo_term_get_modes(WilloTerminal* term, WilloTerminalModes* out_modes);
 
 #ifdef __cplusplus
 }

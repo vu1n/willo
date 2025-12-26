@@ -3,10 +3,12 @@ import SwiftUI
 struct WelcomeView: View {
     @Binding var showingProfiles: Bool
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var appearanceSettings: AppearanceSettings
     @State private var showingTerminalDemo = false
     @State private var showingMetalDemo = false
     @State private var showingSSHTest = false
+    @State private var showingTUIGallery = false
     @State private var animateIn = false
 
     var body: some View {
@@ -67,7 +69,8 @@ struct WelcomeView: View {
                             LaunchPanel(
                                 servers: Array(appState.serverProfiles.prefix(3)),
                                 onSelect: connectTo,
-                                onManage: { showingProfiles = true }
+                                onManage: { showingProfiles = true },
+                                onBrowseApps: { showingTUIGallery = true }
                             )
                             .opacity(animateIn ? 1 : 0)
                             .animation(.easeOut(duration: 0.5).delay(0.3), value: animateIn)
@@ -130,21 +133,49 @@ struct WelcomeView: View {
                     }
             }
         }
+        .sheet(isPresented: $showingTUIGallery) {
+            TUIGalleryView(
+                onLaunch: { app in
+                    // Launch the app in an active session
+                    // For now, just show what would be sent
+                    print("[TUI] Would launch: \(app.launchCommand)")
+                },
+                onInstall: { app in
+                    // Show install command in terminal
+                    print("[TUI] Would install: \(app.installCommand)")
+                }
+            )
+        }
         .preferredColorScheme(.dark)
     }
 
     private func connectTo(profile: ServerProfile) {
-        let workspace = Workspace(
-            serverProfile: profile,
-            sessionName: generateSessionName(for: profile)
+        // Generate zellij-style session name (adjective-noun)
+        let sessionName = generateZellijStyleName()
+
+        // Create session directly using sessionStore - goes straight to terminal
+        sessionStore.createSession(
+            profile: profile,
+            name: sessionName,
+            color: SessionColor.allCases.randomElement() ?? .cyan
         )
-        appState.workspaces.append(workspace)
-        appState.activeWorkspaceId = workspace.id
     }
 
-    private func generateSessionName(for profile: ServerProfile) -> String {
-        let hostPart = profile.hostname.split(separator: ".").first ?? "server"
-        return "willo/\(profile.username)/\(hostPart)"
+    /// Generate a zellij-style session name (adjective-noun)
+    private func generateZellijStyleName() -> String {
+        let adjectives = ["bold", "brave", "bright", "calm", "cool", "fair", "fast", "fresh", "gentle", "kind", "mild", "noble", "quick", "quiet", "swift", "warm", "wild"]
+        let nouns = ["brook", "cloud", "dawn", "dream", "field", "fire", "fog", "frost", "lake", "leaf", "moon", "rain", "river", "sky", "star", "storm", "sun", "wave", "wind"]
+
+        let existingNames = Set(sessionStore.sessions.map { $0.name })
+
+        // Try to find unique name
+        for _ in 0..<50 {
+            let name = "\(adjectives.randomElement()!)-\(nouns.randomElement()!)"
+            if !existingNames.contains(name) {
+                return name
+            }
+        }
+        return "\(adjectives.randomElement()!)-\(nouns.randomElement()!)-\(Int.random(in: 1...99))"
     }
 }
 
@@ -240,6 +271,7 @@ private struct LaunchPanel: View {
     let servers: [ServerProfile]
     let onSelect: (ServerProfile) -> Void
     let onManage: () -> Void
+    var onBrowseApps: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -258,13 +290,25 @@ private struct LaunchPanel: View {
                 }
             }
 
-            // Manage button
-            IndustrialButton(
-                title: "Manage Servers",
-                icon: "server.rack",
-                style: .secondary
-            ) {
-                onManage()
+            // Action buttons
+            HStack(spacing: 12) {
+                IndustrialButton(
+                    title: "Manage Servers",
+                    icon: "server.rack",
+                    style: .secondary
+                ) {
+                    onManage()
+                }
+
+                if onBrowseApps != nil {
+                    IndustrialButton(
+                        title: "TUI Apps",
+                        icon: "square.grid.2x2",
+                        style: .secondary
+                    ) {
+                        onBrowseApps?()
+                    }
+                }
             }
         }
         .frame(maxWidth: 500)
@@ -462,5 +506,6 @@ private struct DebugPanel: View {
             ]
             return state
         }())
+        .environmentObject(SessionStore())
         .environmentObject(AppearanceSettings())
 }

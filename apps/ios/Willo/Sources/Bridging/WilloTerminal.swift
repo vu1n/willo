@@ -73,6 +73,57 @@ final class WilloTerminal {
         }
     }
 
+    /// Terminal modes structure for input handling
+    struct TerminalModes {
+        var bracketedPaste: Bool       // CSI ?2004h
+        var focusEvent: Bool           // CSI ?1004h
+        var mouseAlternateScroll: Bool // CSI ?1007h
+        var mouseEventNormal: Bool     // CSI ?1000h
+        var mouseEventButton: Bool     // CSI ?1002h
+        var mouseEventAny: Bool        // CSI ?1003h
+        var mouseFormatSGR: Bool       // CSI ?1006h
+        var altScreen: Bool            // CSI ?1049h
+
+        init(from cModes: WilloTerminalModes) {
+            self.bracketedPaste = cModes.bracketed_paste
+            self.focusEvent = cModes.focus_event
+            self.mouseAlternateScroll = cModes.mouse_alternate_scroll
+            self.mouseEventNormal = cModes.mouse_event_normal
+            self.mouseEventButton = cModes.mouse_event_button
+            self.mouseEventAny = cModes.mouse_event_any
+            self.mouseFormatSGR = cModes.mouse_format_sgr
+            self.altScreen = cModes.alt_screen
+        }
+
+        /// Default modes (all disabled except mouseAlternateScroll)
+        static var `default`: TerminalModes {
+            TerminalModes(
+                bracketedPaste: false,
+                focusEvent: false,
+                mouseAlternateScroll: true, // Default enabled per xterm
+                mouseEventNormal: false,
+                mouseEventButton: false,
+                mouseEventAny: false,
+                mouseFormatSGR: false,
+                altScreen: false
+            )
+        }
+
+        init(bracketedPaste: Bool = false, focusEvent: Bool = false,
+             mouseAlternateScroll: Bool = true, mouseEventNormal: Bool = false,
+             mouseEventButton: Bool = false, mouseEventAny: Bool = false,
+             mouseFormatSGR: Bool = false, altScreen: Bool = false) {
+            self.bracketedPaste = bracketedPaste
+            self.focusEvent = focusEvent
+            self.mouseAlternateScroll = mouseAlternateScroll
+            self.mouseEventNormal = mouseEventNormal
+            self.mouseEventButton = mouseEventButton
+            self.mouseEventAny = mouseEventAny
+            self.mouseFormatSGR = mouseFormatSGR
+            self.altScreen = altScreen
+        }
+    }
+
     // MARK: - Properties
 
     private(set) var rows: Int
@@ -183,5 +234,16 @@ final class WilloTerminal {
     func clearDirty() {
         guard let handle = terminalHandle else { return }
         willo_term_clear_dirty(handle)
+    }
+
+    /// Get the current terminal modes (bracketed paste, focus events, mouse modes, etc.)
+    func getModes() -> TerminalModes {
+        guard let handle = terminalHandle else {
+            return .default
+        }
+
+        var cModes = WilloTerminalModes()
+        willo_term_get_modes(handle, &cModes)
+        return TerminalModes(from: cModes)
     }
 }
