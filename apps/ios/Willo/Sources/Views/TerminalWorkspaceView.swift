@@ -14,6 +14,7 @@ struct TerminalWorkspaceView: View {
     @State private var showingSettings = false
     @State private var showingCommandPalette = false
     @State private var showingSaveLayout = false
+    @State private var showingTUIGallery = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
     @StateObject private var networkMonitor = NetworkMonitor.shared
@@ -27,6 +28,7 @@ struct TerminalWorkspaceView: View {
                     sessionState: sessionState,
                     voiceManager: voiceManager,
                     onCommandPalette: { showingCommandPalette = true },
+                    onTUIApps: { showingTUIGallery = true },
                     onSettings: { showingSettings = true },
                     onDisconnect: { Task { await disconnect() } },
                     onReconnect: { Task { await connect() } },
@@ -77,6 +79,32 @@ struct TerminalWorkspaceView: View {
                     captureLayout(session: session, completion: completion)
                 }
             }
+        }
+        .sheet(isPresented: $showingTUIGallery) {
+            TUIGalleryView(
+                onLaunch: { app in
+                    // Send launch command to terminal
+                    Task {
+                        if let session = session {
+                            let command = app.launchCommand + "\n"
+                            if let data = command.data(using: .utf8) {
+                                try? await session.transport.send(data)
+                            }
+                        }
+                    }
+                },
+                onInstall: { app in
+                    // Send install command to terminal
+                    Task {
+                        if let session = session {
+                            let command = app.installCommand + "\n"
+                            if let data = command.data(using: .utf8) {
+                                try? await session.transport.send(data)
+                            }
+                        }
+                    }
+                }
+            )
         }
         #if os(iOS)
         .navigationBarHidden(true)
@@ -434,6 +462,7 @@ struct TerminalStatusBar: View {
     let sessionState: SessionState
     @ObservedObject var voiceManager: VoiceInputManager
     let onCommandPalette: () -> Void
+    let onTUIApps: () -> Void
     let onSettings: () -> Void
     let onDisconnect: () -> Void
     let onReconnect: () -> Void
@@ -484,6 +513,14 @@ struct TerminalStatusBar: View {
                         onCommandPalette()
                     }
                     .help("Zellij Commands (⌘K)")
+                }
+
+                // TUI Apps (only when connected)
+                if sessionState == .connected {
+                    IndustrialIconButton(icon: "square.grid.2x2", isActive: false, activeColor: .terminalGreen) {
+                        onTUIApps()
+                    }
+                    .help("TUI Apps")
                 }
 
                 // Settings
