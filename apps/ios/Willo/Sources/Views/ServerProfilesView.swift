@@ -241,6 +241,15 @@ struct ProfileEditorView: View {
     @State private var password: String = ""
     let isNew: Bool
 
+    // Test connection state
+    @State private var isTestingConnection = false
+    @State private var testConnectionResult: ConnectionTestResult?
+
+    // SSH key installation state
+    @State private var isInstallingKey = false
+    @State private var keyInstallResult: KeyInstallResult?
+    @State private var showingKeyInstallConfirm = false
+
     private var authMethodType: Int {
         switch profile.authMethod {
         case .key: return 0
@@ -263,8 +272,10 @@ struct ProfileEditorView: View {
                 VStack(spacing: 24) {
                     connectionSection
                     authenticationSection
+                    sshKeySection
                     connectionTypeSection
                     sessionSection
+                    testConnectionSection
                 }
                 .padding(20)
             }
@@ -401,6 +412,127 @@ struct ProfileEditorView: View {
         }
     }
 
+    // MARK: - SSH Key Section
+
+    private var sshKeySection: some View {
+        EditorSection(title: "SSH Key Setup", icon: "key.horizontal") {
+            VStack(spacing: 12) {
+                // Current key status
+                HStack(spacing: 10) {
+                    Image(systemName: SSHKeyManager.shared.hasKeyPair ? "checkmark.circle.fill" : "xmark.circle")
+                        .foregroundStyle(SSHKeyManager.shared.hasKeyPair ? Color.terminalGreen : Color.textTertiary)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(SSHKeyManager.shared.hasKeyPair ? "SSH Key Ready" : "No SSH Key")
+                            .font(.willoMono(.body, weight: .medium))
+                            .foregroundStyle(Color.textPrimary)
+                        Text(SSHKeyManager.shared.hasKeyPair
+                             ? "Key can be installed on servers"
+                             : "Generate a key for passwordless login")
+                            .font(.willoCaption)
+                            .foregroundStyle(Color.textTertiary)
+                    }
+
+                    Spacer()
+                }
+
+                // Key install result
+                if let result = keyInstallResult {
+                    KeyInstallResultView(result: result)
+                }
+
+                // Action buttons
+                HStack(spacing: 10) {
+                    if !SSHKeyManager.shared.hasKeyPair {
+                        Button {
+                            generateKey()
+                        } label: {
+                            Label("Generate Key", systemImage: "plus.circle")
+                                .font(.willoMono(.caption, weight: .semibold))
+                        }
+                        .buttonStyle(SmallActionButtonStyle(color: .terminalCyan))
+                    } else {
+                        Button {
+                            showingKeyInstallConfirm = true
+                        } label: {
+                            if isInstallingKey {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Label("Install on Server", systemImage: "arrow.up.circle")
+                                    .font(.willoMono(.caption, weight: .semibold))
+                            }
+                        }
+                        .buttonStyle(SmallActionButtonStyle(color: .terminalGreen))
+                        .disabled(isInstallingKey || !canTestConnection)
+                    }
+
+                    // Copy public key button
+                    if SSHKeyManager.shared.hasKeyPair {
+                        Button {
+                            copyPublicKey()
+                        } label: {
+                            Label("Copy Key", systemImage: "doc.on.doc")
+                                .font(.willoMono(.caption, weight: .semibold))
+                        }
+                        .buttonStyle(SmallActionButtonStyle(color: .terminalBlue))
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Install SSH Key", isPresented: $showingKeyInstallConfirm) {
+            Button("Install Key") {
+                installSSHKey()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will add your public key to \(profile.username)@\(profile.hostname) for passwordless login. You'll need to authenticate once with your current method.")
+        }
+    }
+
+    // MARK: - Test Connection Section
+
+    private var testConnectionSection: some View {
+        EditorSection(title: "Test Connection", icon: "antenna.radiowaves.left.and.right") {
+            VStack(spacing: 12) {
+                // Result display
+                if let result = testConnectionResult {
+                    ConnectionTestResultView(result: result)
+                }
+
+                // Test button
+                Button {
+                    testConnection()
+                } label: {
+                    HStack(spacing: 8) {
+                        if isTestingConnection {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "bolt.circle.fill")
+                        }
+                        Text(isTestingConnection ? "Testing..." : "Test Connection")
+                            .font(.willoMono(.callout, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(canTestConnection ? Color.terminalCyan : Color.bezelGray)
+                    }
+                    .foregroundStyle(canTestConnection ? Color.machineBlack : Color.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canTestConnection || isTestingConnection)
+            }
+        }
+    }
+
+    private var canTestConnection: Bool {
+        !profile.hostname.isEmpty && !profile.username.isEmpty &&
+        (authMethodType != 1 || !password.isEmpty) // Password required if using password auth
+    }
+
     private var multiplexerPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("MULTIPLEXER")
@@ -458,6 +590,150 @@ struct ProfileEditorView: View {
             appState.serverProfiles[index] = profile
         }
         dismiss()
+    }
+
+    // MARK: - Connection Testing
+
+    private func testConnection() {
+        guard canTestConnection else { return }
+
+        isTestingConnection = true
+        testConnectionResult = nil
+
+        // Build auth method for transport
+        let authMethod: TransportConfig.AuthMethod
+        switch profile.authMethod {
+        case .password:
+            authMethod = .password(password)
+        case .key:
+            // TODO: Use actual key data when key auth is implemented
+            authMethod = .agent
+        case .agent:
+            authMethod = .agent
+        }
+
+        let config = TransportConfig(
+            host: profile.hostname,
+            port: UInt16(profile.port),
+            username: profile.username,
+            authMethod: authMethod,
+            terminalCols: 80,
+            terminalRows: 24
+        )
+
+        Task {
+            let startTime = Date()
+            let transport = NIOSSHTransport(config: config)
+
+            do {
+                try await transport.connect()
+                let elapsed = Date().timeIntervalSince(startTime)
+                try await transport.disconnect()
+
+                await MainActor.run {
+                    testConnectionResult = .success(latency: elapsed)
+                    isTestingConnection = false
+                }
+            } catch {
+                await MainActor.run {
+                    testConnectionResult = .failure(error.localizedDescription)
+                    isTestingConnection = false
+                }
+            }
+        }
+    }
+
+    // MARK: - SSH Key Management
+
+    private func generateKey() {
+        do {
+            let publicKey = try SSHKeyManager.shared.generateKeyPair()
+            keyInstallResult = .keyGenerated(publicKey: publicKey)
+        } catch {
+            keyInstallResult = .failure(error.localizedDescription)
+        }
+    }
+
+    private func copyPublicKey() {
+        guard let publicKey = SSHKeyManager.shared.publicKeyOpenSSH else { return }
+        #if os(iOS)
+        UIPasteboard.general.string = publicKey
+        keyInstallResult = .keyCopied
+        #endif
+    }
+
+    private func installSSHKey() {
+        guard let publicKey = SSHKeyManager.shared.publicKeyOpenSSH else {
+            keyInstallResult = .failure("No SSH key available")
+            return
+        }
+
+        isInstallingKey = true
+        keyInstallResult = nil
+
+        // Build auth method - need password for initial connection
+        let authMethod: TransportConfig.AuthMethod
+        switch profile.authMethod {
+        case .password:
+            authMethod = .password(password)
+        case .key, .agent:
+            // If already using key auth, we still need password to install new key
+            // Show error asking user to enter password
+            keyInstallResult = .failure("Enter password to install key")
+            isInstallingKey = false
+            return
+        }
+
+        let config = TransportConfig(
+            host: profile.hostname,
+            port: UInt16(profile.port),
+            username: profile.username,
+            authMethod: authMethod,
+            terminalCols: 80,
+            terminalRows: 24
+        )
+
+        Task {
+            let transport = NIOSSHTransport(config: config)
+
+            do {
+                // Connect in bootstrap mode (no shell)
+                try await transport.connectForBootstrap()
+
+                // Escape the public key for shell
+                let escapedKey = publicKey.replacingOccurrences(of: "'", with: "'\\''")
+
+                // Command to install SSH key:
+                // 1. Create .ssh directory if needed
+                // 2. Append public key to authorized_keys
+                // 3. Set proper permissions
+                let command = """
+                mkdir -p ~/.ssh && chmod 700 ~/.ssh && \
+                echo '\(escapedKey)' >> ~/.ssh/authorized_keys && \
+                chmod 600 ~/.ssh/authorized_keys && \
+                echo 'SSH key installed successfully'
+                """
+
+                let output = try await transport.executeCommand(command)
+                try await transport.disconnect()
+
+                await MainActor.run {
+                    if output.contains("successfully") {
+                        keyInstallResult = .keyInstalled
+                        // Switch profile to key auth
+                        profile.authMethod = .key(keyId: nil)
+                    } else {
+                        keyInstallResult = .failure("Unexpected response: \(output)")
+                    }
+                    isInstallingKey = false
+                }
+            } catch {
+                await MainActor.run {
+                    keyInstallResult = .failure(error.localizedDescription)
+                    isInstallingKey = false
+                }
+            }
+        }
     }
 }
 
@@ -581,6 +857,180 @@ private struct StartupBehaviorButton: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Connection Test Result
+
+enum ConnectionTestResult {
+    case success(latency: TimeInterval)
+    case failure(String)
+}
+
+private struct ConnectionTestResultView: View {
+    let result: ConnectionTestResult
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: resultIcon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(resultColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(resultTitle)
+                    .font(.willoMono(.caption, weight: .semibold))
+                    .foregroundStyle(resultColor)
+
+                Text(resultDetail)
+                    .font(.willoCaption)
+                    .foregroundStyle(Color.textTertiary)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(resultColor.opacity(0.1))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(resultColor.opacity(0.3), lineWidth: 1)
+                }
+        }
+    }
+
+    private var resultIcon: String {
+        switch result {
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.circle.fill"
+        }
+    }
+
+    private var resultColor: Color {
+        switch result {
+        case .success: return .terminalGreen
+        case .failure: return .terminalRed
+        }
+    }
+
+    private var resultTitle: String {
+        switch result {
+        case .success: return "Connection Successful"
+        case .failure: return "Connection Failed"
+        }
+    }
+
+    private var resultDetail: String {
+        switch result {
+        case .success(let latency):
+            return String(format: "Connected in %.0fms", latency * 1000)
+        case .failure(let error):
+            return error
+        }
+    }
+}
+
+// MARK: - SSH Key Install Result
+
+enum KeyInstallResult {
+    case keyGenerated(publicKey: String)
+    case keyCopied
+    case keyInstalled
+    case failure(String)
+}
+
+private struct KeyInstallResultView: View {
+    let result: KeyInstallResult
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: resultIcon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(resultColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(resultTitle)
+                    .font(.willoMono(.caption, weight: .semibold))
+                    .foregroundStyle(resultColor)
+
+                Text(resultDetail)
+                    .font(.willoCaption)
+                    .foregroundStyle(Color.textTertiary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(resultColor.opacity(0.1))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(resultColor.opacity(0.3), lineWidth: 1)
+                }
+        }
+    }
+
+    private var resultIcon: String {
+        switch result {
+        case .keyGenerated: return "key.fill"
+        case .keyCopied: return "doc.on.doc.fill"
+        case .keyInstalled: return "checkmark.circle.fill"
+        case .failure: return "xmark.circle.fill"
+        }
+    }
+
+    private var resultColor: Color {
+        switch result {
+        case .keyGenerated, .keyCopied: return .terminalBlue
+        case .keyInstalled: return .terminalGreen
+        case .failure: return .terminalRed
+        }
+    }
+
+    private var resultTitle: String {
+        switch result {
+        case .keyGenerated: return "Key Generated"
+        case .keyCopied: return "Public Key Copied"
+        case .keyInstalled: return "Key Installed"
+        case .failure: return "Error"
+        }
+    }
+
+    private var resultDetail: String {
+        switch result {
+        case .keyGenerated:
+            return "Ed25519 keypair created. Install on server for passwordless login."
+        case .keyCopied:
+            return "Public key copied to clipboard"
+        case .keyInstalled:
+            return "SSH key added to server. Passwordless login enabled!"
+        case .failure(let error):
+            return error
+        }
+    }
+}
+
+// MARK: - Small Action Button Style
+
+private struct SmallActionButtonStyle: ButtonStyle {
+    let color: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(configuration.isPressed ? 0.2 : 0.15))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(color.opacity(0.4), lineWidth: 1)
+                    }
+            }
+            .foregroundStyle(color)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }
 
