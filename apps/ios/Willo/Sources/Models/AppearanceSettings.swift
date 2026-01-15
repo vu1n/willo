@@ -34,10 +34,55 @@ final class AppearanceSettings: ObservableObject {
         }
     }
 
+    enum FontFamily: String, CaseIterable {
+        case jetBrainsMono = "JetBrainsMono"
+        case sfMono = "SFMono"
+        case menlo = "Menlo"
+
+        var displayName: String {
+            switch self {
+            case .jetBrainsMono: return "JetBrains Mono"
+            case .sfMono: return "SF Mono"
+            case .menlo: return "Menlo"
+            }
+        }
+
+        var fontName: String {
+            switch self {
+            case .jetBrainsMono: return "JetBrainsMonoNF-Regular"
+            case .sfMono: return "SFMono-Regular"
+            case .menlo: return "Menlo-Regular"
+            }
+        }
+
+        var boldFontName: String {
+            switch self {
+            case .jetBrainsMono: return "JetBrainsMonoNF-Bold"
+            case .sfMono: return "SFMono-Bold"
+            case .menlo: return "Menlo-Bold"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .jetBrainsMono: return "Nerd Font with icons"
+            case .sfMono: return "Apple's monospace font"
+            case .menlo: return "Classic terminal font"
+            }
+        }
+    }
+
     /// Stored appearance mode - using explicit UserDefaults for reliability
     @Published var mode: AppearanceMode {
         didSet {
             UserDefaults.standard.set(mode.rawValue, forKey: "appearanceMode")
+        }
+    }
+
+    /// Terminal font family
+    @Published var fontFamily: FontFamily {
+        didSet {
+            UserDefaults.standard.set(fontFamily.rawValue, forKey: "terminalFontFamily")
         }
     }
 
@@ -60,6 +105,14 @@ final class AppearanceSettings: ObservableObject {
             self.mode = savedMode
         } else {
             self.mode = .system
+        }
+
+        // Load saved font family or default
+        if let savedFamily = UserDefaults.standard.string(forKey: "terminalFontFamily"),
+           let family = FontFamily(rawValue: savedFamily) {
+            self.fontFamily = family
+        } else {
+            self.fontFamily = .jetBrainsMono
         }
 
         // Load saved font size or default
