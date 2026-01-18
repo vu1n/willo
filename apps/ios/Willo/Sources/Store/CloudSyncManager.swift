@@ -276,6 +276,21 @@ final class CloudSyncManager: ObservableObject {
         }
     }
 
+    /// Load server profiles from iCloud, forcing a sync first
+    /// This is the preferred method for initial app load to ensure we get the latest data
+    func loadServerProfilesWithSync() -> [SyncableServerProfile]? {
+        guard isAvailable else {
+            print("[CloudSync] iCloud not available for profile sync")
+            return nil
+        }
+
+        // Force synchronize to pull latest data from iCloud
+        // This is important on fresh installs where local cache is empty
+        cloudStore.synchronize()
+
+        return loadServerProfiles()
+    }
+
     /// Merge iCloud profiles with local profiles (last-write-wins by timestamp)
     func mergeServerProfiles(local: [ServerProfile], cloud: [SyncableServerProfile]) -> [ServerProfile] {
         var merged = local

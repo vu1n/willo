@@ -62,12 +62,13 @@ public final class AppState: ObservableObject {
     private let cloudSync = CloudSyncManager.shared
 
     init() {
+        // Load from iCloud first (primary source), fall back to UserDefaults
         loadServerProfiles()
 
         // Set up observation for saving after init completes
         setupAutoSave()
 
-        // Set up cloud sync
+        // Set up cloud sync for external changes
         setupCloudSync()
     }
 
@@ -78,7 +79,7 @@ public final class AppState: ObservableObject {
     // MARK: - Cloud Sync Setup
 
     private func setupCloudSync() {
-        // Listen for external changes from iCloud
+        // Listen for external changes from iCloud (other devices)
         cloudSync.syncEvents
             .sink { [weak self] event in
                 guard let self = self else { return }
@@ -90,9 +91,7 @@ public final class AppState: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-
-        // Perform initial merge with cloud data
-        mergeCloudProfiles()
+        // Note: Initial load from iCloud happens in loadServerProfiles()
     }
 
     private func mergeCloudProfiles() {
@@ -145,11 +144,45 @@ public final class AppState: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        // Try iCloud first (primary source) - this survives app reinstalls
+        if let cloudProfiles = cloudSync.loadServerProfilesWithSync(), !cloudProfiles.isEmpty {
+            print("[AppState] Loaded \(cloudProfiles.count) profiles from iCloud")
+            serverProfiles = cloudProfiles.map { $0.toServerProfile(preservingAuthFrom: nil) }
+
+            // Also restore any local auth data from UserDefaults cache
+            if let localData = UserDefaults.standard.data(forKey: Self.serverProfilesKey),
+               let localProfiles = try? JSONDecoder().decode([ServerProfile].self, from: localData) {
+                let localById = Dictionary(uniqueKeysWithValues: localProfiles.map { ($0.id, $0) })
+                for i in serverProfiles.indices {
+                    if let localProfile = localById[serverProfiles[i].id] {
+                        // Preserve local auth method (passwords don't sync to iCloud)
+                        serverProfiles[i] = SyncableServerProfile(
+                            id: serverProfiles[i].id,
+                            displayName: serverProfiles[i].displayName,
+                            hostname: serverProfiles[i].hostname,
+                            port: serverProfiles[i].port,
+                            username: serverProfiles[i].username,
+                            authMethod: serverProfiles[i].authMethod,
+                            multiplexer: serverProfiles[i].multiplexer,
+                            startupBehavior: serverProfiles[i].startupBehavior,
+                            sessionTemplate: serverProfiles[i].sessionTemplate,
+                            preferMosh: serverProfiles[i].preferMosh,
+                            lastConnected: serverProfiles[i].lastConnected
+                        ).toServerProfile(preservingAuthFrom: localProfile)
+                    }
+                }
+            }
+            return
+        }
+
+        // Fall back to UserDefaults (local cache / offline mode)
         guard let data = UserDefaults.standard.data(forKey: Self.serverProfilesKey) else {
+            print("[AppState] No profiles in iCloud or UserDefaults")
             return
         }
         do {
             serverProfiles = try JSONDecoder().decode([ServerProfile].self, from: data)
+            print("[AppState] Loaded \(serverProfiles.count) profiles from UserDefaults (iCloud unavailable)")
         } catch {
             print("[AppState] Failed to load server profiles: \(error)")
         }
