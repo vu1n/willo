@@ -83,6 +83,7 @@ final class WilloTerminal {
         var mouseEventAny: Bool        // CSI ?1003h
         var mouseFormatSGR: Bool       // CSI ?1006h
         var altScreen: Bool            // CSI ?1049h
+        var synchronizedOutput: Bool   // CSI ?2026h - app is batching updates
 
         init(from cModes: WilloTerminalModes) {
             self.bracketedPaste = cModes.bracketed_paste
@@ -93,6 +94,7 @@ final class WilloTerminal {
             self.mouseEventAny = cModes.mouse_event_any
             self.mouseFormatSGR = cModes.mouse_format_sgr
             self.altScreen = cModes.alt_screen
+            self.synchronizedOutput = cModes.synchronized_output
         }
 
         /// Default modes (all disabled except mouseAlternateScroll)
@@ -105,14 +107,16 @@ final class WilloTerminal {
                 mouseEventButton: false,
                 mouseEventAny: false,
                 mouseFormatSGR: false,
-                altScreen: false
+                altScreen: false,
+                synchronizedOutput: false
             )
         }
 
         init(bracketedPaste: Bool = false, focusEvent: Bool = false,
              mouseAlternateScroll: Bool = true, mouseEventNormal: Bool = false,
              mouseEventButton: Bool = false, mouseEventAny: Bool = false,
-             mouseFormatSGR: Bool = false, altScreen: Bool = false) {
+             mouseFormatSGR: Bool = false, altScreen: Bool = false,
+             synchronizedOutput: Bool = false) {
             self.bracketedPaste = bracketedPaste
             self.focusEvent = focusEvent
             self.mouseAlternateScroll = mouseAlternateScroll
@@ -121,6 +125,7 @@ final class WilloTerminal {
             self.mouseEventAny = mouseEventAny
             self.mouseFormatSGR = mouseFormatSGR
             self.altScreen = altScreen
+            self.synchronizedOutput = synchronizedOutput
         }
     }
 

@@ -444,18 +444,59 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     func feed(_ data: Data) {
         print("[TerminalView] feed() called with \(data.count) bytes, metalAvailable=\(metalAvailable), pipelineState=\(pipelineState != nil)")
         terminal?.feed(data)
+
+        // Always update cell data from terminal state
         updateCellsFromTerminal()
-        print("[TerminalView] After feed: cells.count=\(cells.count), grid=\(cols)x\(rows)")
         needsRender = true
-        setNeedsDisplay()
+        print("[TerminalView] After feed: cells.count=\(cells.count), grid=\(cols)x\(rows)")
+
+        // Check if we're in synchronized output mode
+        // If so, defer the display update to allow batching, but schedule a fallback
+        let modes = terminal?.getModes() ?? .default
+        if modes.synchronizedOutput {
+            // App is batching updates - schedule deferred render
+            scheduleSyncFallbackRender()
+        } else {
+            // Not in sync mode - render immediately
+            syncFallbackWorkItem?.cancel()
+            setNeedsDisplay()
+        }
     }
 
     /// Feed a string to the terminal
     func feed(_ string: String) {
         terminal?.feed(string)
+
+        // Always update cell data
         updateCellsFromTerminal()
         needsRender = true
-        setNeedsDisplay()
+
+        // Check synchronized output mode
+        let modes = terminal?.getModes() ?? .default
+        if modes.synchronizedOutput {
+            scheduleSyncFallbackRender()
+        } else {
+            syncFallbackWorkItem?.cancel()
+            setNeedsDisplay()
+        }
+    }
+
+    /// Work item for fallback sync render
+    private var syncFallbackWorkItem: DispatchWorkItem?
+
+    /// Schedule a fallback render in case synchronized output mode never ends
+    private func scheduleSyncFallbackRender() {
+        // Cancel any existing fallback
+        syncFallbackWorkItem?.cancel()
+
+        // Schedule fallback render after 16ms (roughly one frame at 60fps)
+        // This gives time for more data to arrive while not causing visible delay
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.setNeedsDisplay()
+        }
+        syncFallbackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016, execute: workItem)
     }
 
     /// Update the terminal grid with new cell data
@@ -868,7 +909,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     func deleteBackward() {
-        // Send backspace (DEL character)
+        // Send backspace (DEL character 0x7F)
+        print("[Input] deleteBackward called - sending 0x7F")
         let backspace = Data([0x7F])
         onInput?(backspace)
     }
@@ -996,6 +1038,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Tab
         commands.append(UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(handleTab)))
 
+        // Enter/Return key - send carriage return
+        commands.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(handleEnter)))
+        commands.append(UIKeyCommand(input: "\n", modifierFlags: [], action: #selector(handleEnter)))
+
         // Control + letter combinations (a-z)
         for char in "abcdefghijklmnopqrstuvwxyz" {
             commands.append(UIKeyCommand(input: String(char), modifierFlags: .control, action: #selector(handleControlKey(_:))))
@@ -1035,7 +1081,11 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
             commands.append(UIKeyCommand(input: UIKeyCommand.inputPageDown, modifierFlags: [], action: #selector(handlePageDown)))
         }
 
-        // Delete key (forward delete, not backspace)
+        // Backspace key (the key labeled "delete" on Mac keyboards)
+        // This ensures hardware keyboard backspace works even if deleteBackward() isn't called
+        commands.append(UIKeyCommand(input: "\u{08}", modifierFlags: [], action: #selector(handleBackspace)))
+
+        // Forward delete key (fn+backspace on Mac keyboards)
         commands.append(UIKeyCommand(input: UIKeyCommand.inputDelete, modifierFlags: [], action: #selector(handleDelete)))
 
         return commands
@@ -1063,6 +1113,11 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     @objc private func handleTab() {
         onInput?(Data([0x09]))  // TAB
+    }
+
+    @objc private func handleEnter() {
+        print("[Input] handleEnter called - sending CR (0x0D)")
+        onInput?(Data([0x0D]))  // Carriage Return
     }
 
     @objc private func handlePaste() {
@@ -1186,7 +1241,16 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     @objc private func handleDelete() {
+        // Forward delete (fn+backspace on Mac) sends ESC[3~
+        print("[Input] handleDelete called - sending ESC[3~")
         sendEscapeSequence("[3~")
+    }
+
+    @objc private func handleBackspace() {
+        // Explicit backspace handler for hardware keyboards
+        print("[Input] handleBackspace called - sending 0x7F")
+        let backspace = Data([0x7F])
+        onInput?(backspace)
     }
 
     // TODO: IME Support for CJK Input
