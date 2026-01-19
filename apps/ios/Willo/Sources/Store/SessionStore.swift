@@ -25,6 +25,12 @@ final class SessionStore: ObservableObject {
     /// Key: WilloSession.id, Value: TerminalSession
     private var activeTerminalSessions: [UUID: TerminalSession] = [:]
 
+    // MARK: - Zellij Bridge Instances
+
+    /// Cache of Zellij bridges per session
+    /// Key: WilloSession.id, Value: ZellijBridge
+    private var zellijBridges: [UUID: ZellijBridge] = [:]
+
     // MARK: - Dependencies
 
     private weak var sessionManager: SessionManager?
@@ -71,6 +77,45 @@ final class SessionStore: ObservableObject {
     /// Check if a terminal session is active
     func hasActiveTerminalSession(for sessionId: UUID) -> Bool {
         return activeTerminalSessions[sessionId] != nil
+    }
+
+    // MARK: - Zellij Bridge Management
+
+    /// Start a Zellij bridge for a session
+    /// - Parameters:
+    ///   - sessionId: The WilloSession ID
+    ///   - transport: The SSH transport to use for the bridge channel
+    ///   - zellijSessionName: The name of the Zellij session on the server
+    func startBridge(
+        for sessionId: UUID,
+        transport: NIOSSHTransport,
+        zellijSessionName: String
+    ) async {
+        // Don't start duplicate bridges
+        guard zellijBridges[sessionId] == nil else {
+            print("[SessionStore] Bridge already exists for session \(sessionId)")
+            return
+        }
+
+        let bridge = ZellijBridge(sessionName: zellijSessionName)
+        zellijBridges[sessionId] = bridge
+        await bridge.start(transport: transport)
+    }
+
+    /// Stop and remove the Zellij bridge for a session
+    func stopBridge(for sessionId: UUID) {
+        zellijBridges[sessionId]?.stop()
+        zellijBridges.removeValue(forKey: sessionId)
+    }
+
+    /// Get the Zellij bridge for a session
+    func getBridge(for sessionId: UUID) -> ZellijBridge? {
+        zellijBridges[sessionId]
+    }
+
+    /// Check if a session has an active bridge
+    func hasActiveBridge(for sessionId: UUID) -> Bool {
+        zellijBridges[sessionId]?.isConnected ?? false
     }
 
     // MARK: - Computed Properties
@@ -205,6 +250,9 @@ final class SessionStore: ObservableObject {
 
     /// Close and remove a session
     func closeSession(_ sessionId: UUID) {
+        // Stop Zellij bridge if active
+        stopBridge(for: sessionId)
+
         // Disconnect terminal session if active
         if let terminalSession = activeTerminalSessions[sessionId] {
             Task {

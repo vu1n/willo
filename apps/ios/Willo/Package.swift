@@ -29,6 +29,8 @@ let package = Package(
             path: "Sources",
             resources: [
                 .copy("Resources/Fonts"),
+                .copy("Resources/willo-bridge.wasm"),
+                .copy("Resources/willo-bridge.version"),
                 .process("Renderer/TerminalShaders.metal")
             ]
         ),

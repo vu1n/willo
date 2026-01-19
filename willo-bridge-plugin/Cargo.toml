@@ -1,0 +1,20 @@
+[package]
+name = "willo-bridge"
+version = "1.0.0"
+edition = "2021"
+authors = ["Willo Team"]
+description = "Zellij plugin for Willo bridge communication"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zellij-tile = "0.40.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

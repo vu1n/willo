@@ -600,3 +600,183 @@ final class CommandOutputHandler: ChannelInboundHandler, @unchecked Sendable {
         context.close(promise: nil)
     }
 }
+
+// MARK: - Bridge Channel Support
+
+/// Handle for a long-running SSH exec channel (bidirectional)
+/// Used for Zellij bridge pipe communication
+final class BridgeChannelHandle: @unchecked Sendable {
+    private let nioChannel: Channel
+    private let onDataCallback: @Sendable (Data) -> Void
+    private let onCloseCallback: @Sendable () -> Void
+    private var earlyDataBuffer: [Data] = []
+    private var isReady = false
+    private var isClosed = false
+    private let lock = NSLock()
+
+    init(
+        channel: Channel,
+        onData: @escaping @Sendable (Data) -> Void,
+        onClose: @escaping @Sendable () -> Void
+    ) {
+        self.nioChannel = channel
+        self.onDataCallback = onData
+        self.onCloseCallback = onClose
+    }
+
+    /// Called by channel handler when data arrives
+    /// Thread-safe: may be called from NIO event loop
+    func receiveData(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if isReady {
+            onDataCallback(data)
+        } else {
+            // Buffer data that arrives before we're ready
+            earlyDataBuffer.append(data)
+        }
+    }
+
+    /// Called by channel handler when remote closes the channel
+    /// Thread-safe: may be called from NIO event loop
+    func notifyClose() {
+        lock.lock()
+        guard !isClosed else {
+            lock.unlock()
+            return
+        }
+        isClosed = true
+        lock.unlock()
+
+        onCloseCallback()
+    }
+
+    /// Mark channel as ready and flush buffered data
+    func markReady() {
+        lock.lock()
+        let buffered = earlyDataBuffer
+        earlyDataBuffer = []
+        isReady = true
+        lock.unlock()
+
+        // Deliver buffered data
+        for data in buffered {
+            onDataCallback(data)
+        }
+    }
+
+    /// Write data to stdin of the remote process
+    func write(_ data: Data) async throws {
+        var buffer = nioChannel.allocator.buffer(capacity: data.count)
+        buffer.writeBytes(data)
+        let channelData = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
+        try await nioChannel.writeAndFlush(channelData).get()
+    }
+
+    /// Close the channel
+    func close() {
+        nioChannel.close(promise: nil)
+    }
+}
+
+/// Handler for bridge channel data (bidirectional exec channel)
+final class BridgeDataHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = SSHChannelData
+
+    private weak var handle: BridgeChannelHandle?
+
+    init(handle: BridgeChannelHandle) {
+        self.handle = handle
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let channelData = unwrapInboundIn(data)
+
+        guard case .byteBuffer(let buffer) = channelData.data else { return }
+
+        if let data = buffer.getData(at: buffer.readerIndex, length: buffer.readableBytes) {
+            handle?.receiveData(data)
+        }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        print("[SSH] Bridge channel inactive (remote closed)")
+        // Notify the handle owner that the remote closed the channel
+        handle?.notifyClose()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        print("[SSH] Bridge channel error: \(error)")
+        handle?.notifyClose()
+        context.close(promise: nil)
+    }
+}
+
+// MARK: - NIOSSHTransport Bridge Extension
+
+extension NIOSSHTransport {
+    /// Open a long-running exec channel for bidirectional communication
+    /// Unlike executeCommand(), this keeps the channel open for streaming
+    ///
+    /// - Parameters:
+    ///   - command: The command to execute (e.g., zellij pipe command)
+    ///   - onData: Callback for received data - passed upfront to avoid early-data race
+    ///   - onClose: Callback when remote closes the channel
+    /// - Returns: Handle for the channel that can be used for bidirectional communication
+    func openBridgeChannel(
+        command: String,
+        onData: @escaping @Sendable (Data) -> Void,
+        onClose: @escaping @Sendable () -> Void = {}
+    ) async throws -> BridgeChannelHandle {
+        guard let channel = channel else {
+            throw TransportError.notConnected
+        }
+
+        // Get SSH handler on the event loop
+        let sshHandler = try await channel.eventLoop.submit {
+            try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+        }.get()
+
+        // We'll create the handle after we have the child channel
+        var bridgeHandle: BridgeChannelHandle!
+
+        // Create child channel on the event loop
+        let childChannel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Channel, Error>) in
+            channel.eventLoop.execute {
+                let promise = channel.eventLoop.makePromise(of: Channel.self)
+                promise.futureResult.whenComplete { result in
+                    continuation.resume(with: result)
+                }
+
+                sshHandler.createChannel(promise) { [onData, onClose] childChannel, channelType in
+                    guard channelType == .session else {
+                        return channel.eventLoop.makeFailedFuture(TransportError.connectionFailed("Invalid channel type"))
+                    }
+
+                    // Create handle with callbacks passed upfront
+                    let handle = BridgeChannelHandle(
+                        channel: childChannel,
+                        onData: onData,
+                        onClose: onClose
+                    )
+                    bridgeHandle = handle
+
+                    return childChannel.pipeline.addHandlers([
+                        BridgeDataHandler(handle: handle)
+                    ])
+                }
+            }
+        }
+
+        // Execute the command
+        let execRequest = SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true)
+        try await childChannel.triggerUserOutboundEvent(execRequest).get()
+
+        // Mark handle as ready - flushes any early data
+        bridgeHandle.markReady()
+
+        print("[SSH] Bridge channel opened for command: \(command.prefix(50))...")
+        return bridgeHandle
+    }
+}
