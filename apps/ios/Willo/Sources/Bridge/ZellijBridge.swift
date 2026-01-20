@@ -7,6 +7,7 @@ enum BridgeMode: Equatable {
     case connecting
     case awaitingHello       // Channel open, waiting for hello validation
     case streaming           // Hello validated, streaming active
+    case sessionNotFound     // Zellij session not found (for retry logic)
     case unsupported(reason: String)
     case needsPluginInstall
     case needsPluginUpdate(installed: String, required: String)
@@ -17,6 +18,7 @@ enum BridgeMode: Equatable {
              (.connecting, .connecting),
              (.awaitingHello, .awaitingHello),
              (.streaming, .streaming),
+             (.sessionNotFound, .sessionNotFound),
              (.needsPluginInstall, .needsPluginInstall):
             return true
         case (.unsupported(let l), .unsupported(let r)):
@@ -38,6 +40,7 @@ enum BridgeMode: Equatable {
         case .connecting: return "Connecting..."
         case .awaitingHello: return "Awaiting bridge..."
         case .streaming: return "Connected"
+        case .sessionNotFound: return "Session not found"
         case .unsupported(let reason): return reason
         case .needsPluginInstall: return "Plugin not installed"
         case .needsPluginUpdate(let installed, let required):
@@ -130,7 +133,7 @@ final class ZellijBridge: ObservableObject {
             case .needsPluginUpdate(let installed, let required):
                 bridgeMode = .needsPluginUpdate(installed: installed, required: required)
             case .sessionNotFound:
-                bridgeMode = .unsupported(reason: "Session '\(sessionName)' not found")
+                bridgeMode = .sessionNotFound
             case .unsupported(let reason):
                 bridgeMode = .unsupported(reason: reason)
             }

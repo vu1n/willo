@@ -295,6 +295,36 @@ struct SessionContainerView: View {
             }
             .keyboardShortcut("]", modifiers: .command)
             .hidden()
+
+            // MARK: Zellij Tab Shortcuts (using Shift to avoid iPad conflicts)
+
+            // Cmd+Shift+] - Zellij next tab
+            Button("") {
+                zellijNextTab()
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .hidden()
+
+            // Cmd+Shift+[ - Zellij previous tab
+            Button("") {
+                zellijPreviousTab()
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .hidden()
+
+            // Cmd+T - Zellij new tab
+            Button("") {
+                zellijNewTab()
+            }
+            .keyboardShortcut("t", modifiers: .command)
+            .hidden()
+
+            // Cmd+D - Zellij split pane right
+            Button("") {
+                zellijSplitPane()
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .hidden()
         }
     }
 
@@ -359,6 +389,74 @@ struct SessionContainerView: View {
         // Clear highlight after brief delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             highlightedSessionId = nil
+        }
+    }
+
+    // MARK: - Zellij Keyboard Shortcut Actions
+
+    private func zellijNextTab() {
+        Task {
+            guard let bridge = sessionStore.activeBridge,
+                  let state = bridge.zellijState,
+                  state.tabs.count > 0 else { return }
+
+            let currentIndex = state.activeTabIndex
+            let nextIndex = min(currentIndex + 1, state.tabs.count - 1)
+
+            // Only switch if not already at last tab
+            if nextIndex != currentIndex {
+                // Haptic feedback
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+
+                try? await bridge.focusTab(nextIndex)
+            }
+        }
+    }
+
+    private func zellijPreviousTab() {
+        Task {
+            guard let bridge = sessionStore.activeBridge,
+                  let state = bridge.zellijState,
+                  state.tabs.count > 0 else { return }
+
+            let currentIndex = state.activeTabIndex
+            let previousIndex = max(currentIndex - 1, 0)
+
+            // Only switch if not already at first tab
+            if previousIndex != currentIndex {
+                // Haptic feedback
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+
+                try? await bridge.focusTab(previousIndex)
+            }
+        }
+    }
+
+    private func zellijNewTab() {
+        Task {
+            guard let bridge = sessionStore.activeBridge,
+                  bridge.isConnected else { return }
+
+            // Haptic feedback
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+
+            try? await bridge.newTab()
+        }
+    }
+
+    private func zellijSplitPane() {
+        Task {
+            guard let bridge = sessionStore.activeBridge,
+                  bridge.isConnected else { return }
+
+            // Haptic feedback
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+
+            try? await bridge.newPane(direction: .right)
         }
     }
 }

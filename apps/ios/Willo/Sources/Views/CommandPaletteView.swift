@@ -4,10 +4,16 @@ import SwiftUI
 ///
 /// Displays a searchable list of zellij commands that inject keybindings
 /// into the terminal session when selected.
+///
+/// When a bridge is connected, uses the bridge API for better reliability.
+/// Falls back to keybindings if bridge call fails or is unavailable.
 struct CommandPaletteView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @FocusState private var isSearchFocused: Bool
+
+    /// Optional Zellij bridge for API-based commands
+    var bridge: ZellijBridge?
 
     /// Callback to send keybinding data to the terminal
     let onSendKeys: (Data) -> Void
@@ -190,6 +196,48 @@ struct CommandPaletteView: View {
             }
         }
 
+        // Try bridge API first if available and connected
+        if let bridge = bridge, bridge.isConnected {
+            Task {
+                let success = await executeBridgeCommand(command, bridge: bridge)
+                if !success {
+                    // Fallback to keybindings on bridge error
+                    await MainActor.run {
+                        sendKeybinding(command)
+                    }
+                }
+            }
+        } else {
+            // No bridge - use keybindings directly
+            sendKeybinding(command)
+        }
+        dismiss()
+    }
+
+    /// Execute a command via the bridge API
+    /// Returns true on success, false if fallback to keybindings is needed
+    private func executeBridgeCommand(_ command: ZellijCommand, bridge: ZellijBridge) async -> Bool {
+        do {
+            switch command.name {
+            case "New Pane Right":
+                try await bridge.newPane(direction: .right)
+            case "New Pane Down":
+                try await bridge.newPane(direction: .down)
+            case "New Tab":
+                try await bridge.newTab()
+            default:
+                // Command not supported by bridge API - use keybindings
+                return false
+            }
+            return true
+        } catch {
+            print("[CommandPalette] Bridge command failed: \(error), falling back to keybinding")
+            return false
+        }
+    }
+
+    /// Send a keybinding to the terminal
+    private func sendKeybinding(_ command: ZellijCommand) {
         // Zellij uses modal keybindings: first send the mode key,
         // wait briefly, then send the action key
         let keys = command.keys
@@ -215,7 +263,6 @@ struct CommandPaletteView: View {
                 onSendKeys(data)
             }
         }
-        dismiss()
     }
 }
 

@@ -19,6 +19,10 @@ final class SessionStore: ObservableObject {
     /// Currently active session ID
     @Published var activeSessionId: UUID?
 
+    /// Currently active Zellij bridge (for UI reactivity)
+    /// Updated when active session changes or bridge starts/stops
+    @Published private(set) var activeBridge: ZellijBridge?
+
     // MARK: - Active Terminal Sessions
 
     /// Cache of active terminal sessions (kept alive when switching tabs)
@@ -100,12 +104,22 @@ final class SessionStore: ObservableObject {
         let bridge = ZellijBridge(sessionName: zellijSessionName)
         zellijBridges[sessionId] = bridge
         await bridge.start(transport: transport)
+
+        // Update activeBridge if this is the active session
+        if sessionId == activeSessionId {
+            activeBridge = bridge
+        }
     }
 
     /// Stop and remove the Zellij bridge for a session
     func stopBridge(for sessionId: UUID) {
         zellijBridges[sessionId]?.stop()
         zellijBridges.removeValue(forKey: sessionId)
+
+        // Clear activeBridge if this was the active session
+        if sessionId == activeSessionId {
+            activeBridge = nil
+        }
     }
 
     /// Get the Zellij bridge for a session
@@ -215,6 +229,9 @@ final class SessionStore: ObservableObject {
         }
 
         activeSessionId = sessionId
+
+        // Update activeBridge for the new session
+        activeBridge = sessionId.flatMap { zellijBridges[$0] }
 
         // Mark new session as active and clear unread
         if let newId = sessionId,

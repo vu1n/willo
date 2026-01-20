@@ -43,9 +43,31 @@ struct TerminalWorkspaceView: View {
                     }
                 )
 
+                // Zellij tab bar (shows when bridge is streaming)
+                if let bridge = sessionStore.getBridge(for: workspace.id) {
+                    ZellijTabBar(
+                        bridge: bridge,
+                        onTabSelect: { tabIndex in
+                            Task {
+                                try? await bridge.focusTab(tabIndex)
+                            }
+                        },
+                        onNewTab: {
+                            Task {
+                                try? await bridge.newTab()
+                            }
+                        }
+                    )
+                }
+
                 // Terminal view
                 TerminalContainerView(session: session)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Bridge status overlay (plugin install/update prompts)
+            if let bridge = sessionStore.getBridge(for: workspace.id) {
+                bridgeStatusOverlay(bridge: bridge)
             }
 
             // Voice transcript HUD - floating above status bar
@@ -62,6 +84,7 @@ struct TerminalWorkspaceView: View {
         .sheet(isPresented: $showingCommandPalette) {
             if let session = session {
                 CommandPaletteView(
+                    bridge: sessionStore.getBridge(for: workspace.id),
                     onSendKeys: { data in
                         Task {
                             try? await session.transport.send(data)
@@ -152,6 +175,11 @@ struct TerminalWorkspaceView: View {
             // Send resize in case screen size changed
             let terminalSize = calculateTerminalSize()
             try? await cachedSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
+
+            // Start bridge if not already active (for cached sessions after app restore)
+            if sessionStore.getBridge(for: workspace.id) == nil {
+                startBridgeIfNeeded(session: cachedSession)
+            }
             return
         }
 
@@ -203,6 +231,9 @@ struct TerminalWorkspaceView: View {
                 try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for shell/multiplexer to initialize
                 try? await newSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
                 print("[Terminal] Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
+
+                // Start Zellij bridge for session observation and control
+                startBridgeIfNeeded(session: newSession)
 
                 // Success - return early
                 return
@@ -307,6 +338,9 @@ struct TerminalWorkspaceView: View {
 
     private func disconnect() async {
         guard let session = session else { return }
+
+        // Stop Zellij bridge (clears stale transport)
+        sessionStore.stopBridge(for: workspace.id)
 
         // Remove from cache since user explicitly disconnected
         sessionStore.removeTerminalSession(for: workspace.id)
@@ -433,6 +467,76 @@ struct TerminalWorkspaceView: View {
                 print("[Terminal] Layout capture failed: \(error)")
                 await MainActor.run {
                     completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    // MARK: - Bridge Status Overlay
+
+    @ViewBuilder
+    private func bridgeStatusOverlay(bridge: ZellijBridge) -> some View {
+        switch bridge.bridgeMode {
+        case .needsPluginInstall, .needsPluginUpdate:
+            // Center overlay for plugin install/update prompts
+            BridgeStatusView(bridge: bridge)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+
+        case .sessionNotFound, .unsupported:
+            // Top banner for errors (positioned below status bar and tab bar)
+            VStack {
+                BridgeStatusView(bridge: bridge)
+                    .padding(.top, 8)
+                Spacer()
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+
+        default:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Bridge Auto-Start
+
+    /// Start Zellij bridge for the session if applicable
+    private func startBridgeIfNeeded(session: TerminalSession) {
+        // Only start for Zellij multiplexer with named sessions
+        guard workspace.serverProfile.multiplexer == .zellij,
+              !workspace.sessionName.isEmpty else {
+            return
+        }
+
+        // Safe cast to NIOSSHTransport
+        guard let sshTransport = session.transport as? NIOSSHTransport else {
+            print("[Terminal] Cannot start bridge - transport is not NIOSSHTransport")
+            return
+        }
+
+        Task { @MainActor in
+            // Retry up to 3 times with 1s delay for session to appear
+            for attempt in 1...3 {
+                // Clear stale bridge before retry (allows restart)
+                if attempt > 1 {
+                    sessionStore.stopBridge(for: workspace.id)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1s delay
+                }
+
+                await sessionStore.startBridge(
+                    for: workspace.id,
+                    transport: sshTransport,
+                    zellijSessionName: workspace.sessionName
+                )
+
+                if let bridge = sessionStore.getBridge(for: workspace.id) {
+                    // Check for sessionNotFound to retry
+                    if bridge.bridgeMode == .sessionNotFound {
+                        if attempt < 3 {
+                            print("[Terminal] Bridge session not found, retry \(attempt + 1)/3...")
+                            continue
+                        }
+                    }
+                    // Success or other state - stop retrying
+                    break
                 }
             }
         }
