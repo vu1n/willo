@@ -37,10 +37,17 @@ final class SessionManager: ObservableObject {
         // Create transport based on config
         let transport = try createTransport(for: config)
 
-        // Create PTY bridge
+        // Create PTY bridge (optional - may fail on physical iOS devices)
+        // NOTE: PTY bridge is not actually used for data flow anymore,
+        // but we keep it for potential future use (e.g., local echo)
         let ptyBridge = PTYBridge()
-        try ptyBridge.open()
-        try ptyBridge.configureTerminal()
+        do {
+            try ptyBridge.open()
+            try ptyBridge.configureTerminal()
+        } catch {
+            // PTY not available (physical iOS device) - continue without it
+            print("[SessionManager] PTY unavailable (expected on physical device): \(error.localizedDescription)")
+        }
 
         // Create session
         let session = TerminalSession(
@@ -167,10 +174,14 @@ final class SessionManager: ObservableObject {
         // Create Ghostty surface
         let surface = GhosttySurface(app: appManager)
 
-        // Create PTY bridge
+        // Create PTY bridge (optional - may fail on physical iOS devices)
         let ptyBridge = PTYBridge()
-        try ptyBridge.open()
-        try ptyBridge.configureTerminal()
+        do {
+            try ptyBridge.open()
+            try ptyBridge.configureTerminal()
+        } catch {
+            print("[SessionManager] PTY unavailable (expected on physical device): \(error.localizedDescription)")
+        }
 
         // Create session with Mosh transport
         let session = TerminalSession(
@@ -251,7 +262,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     func resize(cols: UInt16, rows: UInt16) async throws {
-        try ptyBridge.setSize(cols: cols, rows: rows)
+        // PTY resize is optional (may not be available on physical iOS)
+        try? ptyBridge.setSize(cols: cols, rows: rows)
         try await transport.resize(cols: cols, rows: rows)
     }
 }
