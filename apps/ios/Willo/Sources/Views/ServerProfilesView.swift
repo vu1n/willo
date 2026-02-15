@@ -261,7 +261,9 @@ struct ProfileEditorView: View {
     init(profile: ServerProfile, isNew: Bool) {
         self._profile = State(initialValue: profile)
         self.isNew = isNew
-        if case .password(let pwd) = profile.authMethod {
+        if case .password = profile.authMethod {
+            // Load password from Keychain
+            let pwd = CredentialStore.shared.retrievePassword(forProfileId: profile.id) ?? ""
             self._password = State(initialValue: pwd)
         }
     }
@@ -357,7 +359,7 @@ struct ProfileEditorView: View {
                         profile.authMethod = .key(keyId: nil)
                     }
                     AuthMethodButton(title: "Password", icon: "lock.fill", isSelected: authMethodType == 1) {
-                        profile.authMethod = .password(password)
+                        profile.authMethod = .password
                     }
                     AuthMethodButton(title: "Agent", icon: "person.fill", isSelected: authMethodType == 2) {
                         profile.authMethod = .agent
@@ -580,8 +582,9 @@ struct ProfileEditorView: View {
     }
 
     private func saveProfile() {
-        if case .password = profile.authMethod {
-            profile.authMethod = .password(password)
+        // Store password securely in Keychain
+        if case .password = profile.authMethod, !password.isEmpty {
+            try? CredentialStore.shared.storePassword(password, forProfileId: profile.id)
         }
 
         if isNew {

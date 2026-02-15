@@ -1,5 +1,8 @@
 import SwiftUI
 import CoreText
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "Terminal")
 
 struct TerminalWorkspaceView: View {
     let workspace: Workspace
@@ -17,7 +20,7 @@ struct TerminalWorkspaceView: View {
     @State private var showingTUIGallery = false
     @State private var connectionError: Error?
     @StateObject private var voiceManager = VoiceInputManager()
-    @StateObject private var networkMonitor = NetworkMonitor.shared
+    @ObservedObject private var networkMonitor = NetworkMonitor.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -168,7 +171,7 @@ struct TerminalWorkspaceView: View {
     private func connect() async {
         // Check for cached terminal session first (kept alive from tab switching)
         if let cachedSession = sessionStore.getTerminalSession(for: workspace.id) {
-            print("[Terminal] Reusing cached session for workspace \(workspace.id)")
+            logger.debug("Reusing cached session for workspace \(workspace.id, privacy: .public)")
             self.session = cachedSession
             sessionState = .connected
 
@@ -206,7 +209,7 @@ struct TerminalWorkspaceView: View {
                 )
                 config.terminalCols = terminalSize.cols
                 config.terminalRows = terminalSize.rows
-                print("[Terminal] Connecting with size: \(terminalSize.cols)x\(terminalSize.rows)")
+                logger.info("Connecting with size: \(terminalSize.cols)x\(terminalSize.rows)")
 
                 let newSession: TerminalSession
                 if workspace.serverProfile.preferMosh {
@@ -221,7 +224,7 @@ struct TerminalWorkspaceView: View {
 
                 // Cache the session for tab switching
                 sessionStore.setTerminalSession(newSession, for: workspace.id)
-                print("[Terminal] Cached session for workspace \(workspace.id)")
+                logger.debug("Cached session for workspace \(workspace.id, privacy: .public)")
 
                 // Execute startup command based on profile configuration
                 await executeStartupCommand(session: newSession)
@@ -230,7 +233,7 @@ struct TerminalWorkspaceView: View {
                 // This is especially important when reconnecting to existing zellij/tmux sessions
                 try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for shell/multiplexer to initialize
                 try? await newSession.resize(cols: terminalSize.cols, rows: terminalSize.rows)
-                print("[Terminal] Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
+                logger.debug("Sent resize after connect: \(terminalSize.cols)x\(terminalSize.rows)")
 
                 // Start Zellij bridge for session observation and control
                 startBridgeIfNeeded(session: newSession)
@@ -240,7 +243,7 @@ struct TerminalWorkspaceView: View {
             } catch {
                 if attempt < maxAttempts {
                     let delay = backoff.delay(for: attempt)
-                    print("[Terminal] Connection attempt \(attempt) failed, retrying in \(delay)s...")
+                    logger.warning("Connection attempt \(attempt) failed, retrying in \(delay)s...")
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 } else {
                     sessionState = .error(error)
@@ -307,7 +310,7 @@ struct TerminalWorkspaceView: View {
 
         guard let command = command else { return }
 
-        print("[Terminal] Executing startup command: \(command)")
+        logger.info("Executing startup command: \(command, privacy: .public)")
 
         // Send command with newline
         let commandData = Data((command + "\n").utf8)
@@ -328,7 +331,7 @@ struct TerminalWorkspaceView: View {
 
         """
 
-        print("[Terminal] Ensuring layout '\(layout.name)' exists at \(layoutPath)")
+        logger.debug("Ensuring layout '\(layout.name, privacy: .public)' exists at \(layoutPath, privacy: .public)")
         let commandData = Data(writeCommand.utf8)
         try? await session.transport.send(commandData)
 
@@ -344,7 +347,7 @@ struct TerminalWorkspaceView: View {
 
         // Remove from cache since user explicitly disconnected
         sessionStore.removeTerminalSession(for: workspace.id)
-        print("[Terminal] Removed cached session for workspace \(workspace.id)")
+        logger.debug("Removed cached session for workspace \(workspace.id, privacy: .public)")
 
         try? await sessionManager.disconnect(session)
         self.session = nil
@@ -358,7 +361,7 @@ struct TerminalWorkspaceView: View {
         // Verify the transport is still alive
         let currentState = await session.transport.state
         if currentState != .connected {
-            print("[Terminal] Session disconnected while in background, reconnecting...")
+            logger.info("Session disconnected while in background, reconnecting...")
             sessionState = .reconnecting(attempt: 1)
             await connect()
         }
@@ -416,7 +419,7 @@ struct TerminalWorkspaceView: View {
         let cols = max(40, min(300, UInt16(availableSize.width / cellWidth)))
         let rows = max(10, min(100, UInt16(availableSize.height / cellHeight)))
 
-        print("[Terminal] Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), fontSize: \(fontSize), available: \(availableSize))")
+        logger.debug("Calculated size: \(cols)x\(rows) (cell: \(cellWidth)x\(cellHeight), fontSize: \(fontSize), available: \(availableSize.width)x\(availableSize.height))")
         return (cols, rows)
     }
 
@@ -461,10 +464,10 @@ struct TerminalWorkspaceView: View {
                     completion(.success(templateLayout))
                 }
 
-                print("[Terminal] Layout captured successfully (template)")
+                logger.debug("Layout captured successfully (template)")
 
             } catch {
-                print("[Terminal] Layout capture failed: \(error)")
+                logger.error("Layout capture failed: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run {
                     completion(.failure(error))
                 }
@@ -508,7 +511,7 @@ struct TerminalWorkspaceView: View {
 
         // Safe cast to NIOSSHTransport
         guard let sshTransport = session.transport as? NIOSSHTransport else {
-            print("[Terminal] Cannot start bridge - transport is not NIOSSHTransport")
+            logger.warning("Cannot start bridge - transport is not NIOSSHTransport")
             return
         }
 
@@ -531,7 +534,7 @@ struct TerminalWorkspaceView: View {
                     // Check for sessionNotFound to retry
                     if bridge.bridgeMode == .sessionNotFound {
                         if attempt < 3 {
-                            print("[Terminal] Bridge session not found, retry \(attempt + 1)/3...")
+                            logger.info("Bridge session not found, retry \(attempt + 1)/3...")
                             continue
                         }
                     }
@@ -819,7 +822,8 @@ struct ReconnectingOverlay: View {
 extension ServerProfile {
     var authMethodConfig: AuthMethodConfig {
         switch authMethod {
-        case .password(let pwd):
+        case .password:
+            let pwd = CredentialStore.shared.retrievePassword(forProfileId: id) ?? ""
             return .password(pwd)
         case .key:
             return .publicKey(keyPath: "~/.ssh/id_rsa", passphrase: nil)

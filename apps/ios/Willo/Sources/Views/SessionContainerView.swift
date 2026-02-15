@@ -772,14 +772,17 @@ struct SessionGridCard: View {
     let session: WilloSession
     let action: () -> Void
     @EnvironmentObject var sessionStore: SessionStore
-    @State private var refreshID = UUID()
+    /// Thumbnail image observed via the published thumbnails dictionary
+    private var thumbnail: UIImage? {
+        sessionStore.thumbnailManager.getThumbnail(for: session.id)
+    }
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
                 // Thumbnail or placeholder
                 Group {
-                    if let thumbnail = sessionStore.thumbnailManager.getThumbnail(for: session.id) {
+                    if let thumbnail = thumbnail {
                         Image(uiImage: thumbnail)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -796,7 +799,6 @@ struct SessionGridCard: View {
                             }
                     }
                 }
-                .id(refreshID)
 
                 // Color accent bar
                 Rectangle()
@@ -841,12 +843,6 @@ struct SessionGridCard: View {
             }
         }
         .buttonStyle(.plain)
-        .onReceive(sessionStore.thumbnailManager.$thumbnails) { thumbnails in
-            // Force refresh when thumbnails change for this session
-            if thumbnails[session.id] != nil {
-                refreshID = UUID()
-            }
-        }
     }
 }
 
