@@ -45,7 +45,7 @@ struct ServerProfile: Identifiable, Codable, Equatable, Hashable {
 }
 
 enum AuthMethod: Codable, Equatable, Hashable {
-    case password(String)  // Store password (TODO: move to Keychain in production)
+    case password  // Password stored in Keychain, keyed by profile ID
     case key(keyId: UUID?)
     case agent
 
@@ -62,6 +62,44 @@ enum AuthMethod: Codable, Equatable, Hashable {
     var isPassword: Bool {
         if case .password = self { return true }
         return false
+    }
+
+    // MARK: - Codable migration
+
+    /// Custom decoding to handle migration from old `.password(String)` format
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+
+        // Try decoding the new enum format first
+        if let stringValue = try? container.decode(String.self) {
+            switch stringValue {
+            case "password":
+                self = .password
+            case "agent":
+                self = .agent
+            default:
+                self = .agent
+            }
+            return
+        }
+
+        // Fall back to the keyed container format
+        enum CodingKeys: String, CodingKey {
+            case password, key, agent
+        }
+
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        if keyed.contains(.password) {
+            // Old format stored the password string — migrate by discarding it.
+            // The password should have been migrated to Keychain separately.
+            _ = try? keyed.decode(String.self, forKey: .password)
+            self = .password
+        } else if keyed.contains(.key) {
+            let keyId = try? keyed.decode(UUID?.self, forKey: .key)
+            self = .key(keyId: keyId ?? nil)
+        } else {
+            self = .agent
+        }
     }
 }
 
@@ -142,8 +180,8 @@ enum StartupBehavior: String, Codable, CaseIterable {
             switch multiplexer {
             // Create or attach to session with specific name
             // -c flag creates if doesn't exist, attaches if it does
-            case .zellij: return "zellij attach -c \"\(name)\""
-            case .tmux: return "tmux new-session -A -s \"\(name)\""
+            case .zellij: return "zellij attach -c \(ShellEscape.escape(name))"
+            case .tmux: return "tmux new-session -A -s \(ShellEscape.escape(name))"
             case .none: return nil
             }
         }

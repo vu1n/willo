@@ -61,11 +61,14 @@ struct LayoutTemplate: Identifiable, Equatable {
         self.isUserCreated = isUserCreated
     }
 
-    /// Short hash of content for cache invalidation (changes when layout is updated)
+    /// Hash of content for cache invalidation (changes when layout is updated)
     var contentHash: String {
-        // Simple hash using first 8 chars of content hash
-        let hash = kdlContent.utf8.reduce(0) { ($0 &* 31) &+ Int($1) }
-        return String(format: "%08x", abs(hash))
+        // Use a 64-bit hash to reduce collision probability
+        var hash: UInt64 = 5381
+        for byte in kdlContent.utf8 {
+            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)  // djb2
+        }
+        return String(format: "%016llx", hash)
     }
 
     /// Built-in layout templates

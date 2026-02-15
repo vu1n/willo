@@ -70,13 +70,14 @@ fragment float4 terminalFragment(
     texture2d<float> glyphAtlas [[texture(0)]]
 ) {
     // Sample the glyph atlas (r8 texture - alpha mask)
-    constexpr sampler linearSampler(
-        mag_filter::linear,
-        min_filter::linear,
+    // Use nearest filtering for pixel-perfect terminal glyph rendering
+    constexpr sampler nearestSampler(
+        mag_filter::nearest,
+        min_filter::nearest,
         address::clamp_to_edge
     );
 
-    float glyphAlpha = glyphAtlas.sample(linearSampler, in.texCoord).r;
+    float glyphAlpha = glyphAtlas.sample(nearestSampler, in.texCoord).r;
 
     // Blend foreground color with background based on glyph alpha
     // When glyphAlpha = 0: show background

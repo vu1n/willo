@@ -3,6 +3,9 @@ import NIOCore
 import NIOPosix
 import NIOSSH
 import Crypto
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "SSH")
 
 /// Thread-safe state container for NIOSSHTransport
 private actor SSHTransportState {
@@ -20,63 +23,8 @@ private actor SSHTransportState {
     }
 }
 
-/// Thread-safe container for data callbacks (matches MoshTransport pattern)
-private final class SSHDataCallbackState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var callback: ((Data) -> Void)?
-    private var pendingData: [Data] = []
-    private var isPrimaryCallbackSet = false
-
-    /// Set a primary callback for data delivery
-    func setPrimaryCallback(_ cb: @escaping (Data) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = cb
-        isPrimaryCallbackSet = true
-        // Flush any pending data
-        for data in pendingData {
-            cb(data)
-        }
-        pendingData.removeAll()
-    }
-
-    /// Set a secondary callback (from dataStream). Only works if no primary callback is set.
-    func setSecondaryCallback(_ cb: @escaping (Data) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        if isPrimaryCallbackSet { return }
-        callback = cb
-        for data in pendingData {
-            cb(data)
-        }
-        pendingData.removeAll()
-    }
-
-    func clearCallback() {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = nil
-        isPrimaryCallbackSet = false
-    }
-
-    func deliverData(_ data: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let cb = callback {
-            cb(data)
-        } else {
-            pendingData.append(data)
-        }
-    }
-
-    func finish() {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = nil
-        isPrimaryCallbackSet = false
-        pendingData.removeAll()
-    }
-}
+/// Type alias using shared callback state implementation
+private typealias SSHDataCallbackState = TransportDataCallbackState<Data>
 
 /// NIOSSH-based SSH Transport with PTY support for iOS
 ///
@@ -111,14 +59,12 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     /// NOTE: If setDataCallback was called first, this stream won't receive data
     var dataStream: AsyncStream<Data> {
         AsyncStream(bufferingPolicy: .unbounded) { [dataCallbackState] continuation in
-            print("[SSH] Creating new data stream subscription")
             // Set secondary callback - won't overwrite a primary callback from setDataCallback
             dataCallbackState.setSecondaryCallback { data in
                 continuation.yield(data)
             }
             // Handle stream termination
             continuation.onTermination = { _ in
-                print("[SSH] Data stream terminated, clearing callback")
                 dataCallbackState.clearCallback()
             }
         }
@@ -148,7 +94,8 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     }
 
     deinit {
-        try? group.syncShutdownGracefully()
+        // Use async shutdown to avoid deadlock if deinit runs on an NIO event loop thread
+        group.shutdownGracefully { _ in }
     }
 
     // MARK: - Connection
@@ -157,28 +104,21 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        print("[SSH] Connecting to \(config.host):\(config.port) as \(config.username)")
-        print("[SSH] Auth method: \(config.authMethod)")
+        logger.info("Connecting to \(config.host, privacy: .public):\(config.port)")
 
         do {
-            // Create the SSH client channel
-            print("[SSH] Creating SSH channel...")
             let channel = try await createSSHChannel()
             self.channel = channel
-            print("[SSH] SSH channel created, opening shell...")
 
-            // Open a shell channel with PTY
             try await openShellChannel()
-            print("[SSH] Shell channel with PTY opened")
 
             await stateActor.setState(.connected)
         } catch let error as TransportError {
-            print("[SSH] Transport error: \(error)")
+            logger.error("Transport error: \(error.localizedDescription, privacy: .public)")
             await stateActor.setState(.error(error))
             throw error
         } catch {
-            print("[SSH] Connection error: \(type(of: error)) - \(error)")
-            print("[SSH] Error details: \(String(describing: error))")
+            logger.error("Connection failed: \(error.localizedDescription, privacy: .public)")
             await stateActor.setState(.error(TransportError.connectionFailed(error.localizedDescription)))
             throw TransportError.connectionFailed("\(type(of: error)): \(error)")
         }
@@ -190,42 +130,35 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        print("[SSH] Connecting for bootstrap to \(config.host):\(config.port)")
+        logger.info("Connecting for bootstrap to \(config.host, privacy: .public):\(config.port)")
 
         do {
             let channel = try await createSSHChannel()
             self.channel = channel
-            print("[SSH] SSH channel created (bootstrap mode - no shell)")
 
             await stateActor.setState(.connected)
         } catch let error as TransportError {
-            print("[SSH] Transport error: \(error)")
+            logger.error("Bootstrap transport error: \(error.localizedDescription, privacy: .public)")
             await stateActor.setState(.error(error))
             throw error
         } catch {
-            print("[SSH] Connection error: \(type(of: error)) - \(error)")
+            logger.error("Bootstrap connection failed: \(error.localizedDescription, privacy: .public)")
             await stateActor.setState(.error(TransportError.connectionFailed(error.localizedDescription)))
             throw TransportError.connectionFailed("\(type(of: error)): \(error)")
         }
     }
 
     private func createSSHChannel() async throws -> Channel {
-        // Capture values for use in closure
         let username = config.username
         let password = getPassword()
         let host = config.host
         let port = config.port
-
-        print("[SSH] Setting up connection to \(host):\(port)")
-        print("[SSH] Username: \(username), password length: \(password.count)")
+        let hostKeyDelegate = KnownHostsDelegate(host: host, port: Int(port))
+        let timeoutSeconds = Int64(config.connectionTimeout)
 
         let bootstrap = ClientBootstrap(group: group)
             .channelInitializer { channel in
-                // Create delegates inside closure to avoid Sendable capture issues
                 let authDelegate = PasswordAuthDelegate(username: username, password: password)
-                let hostKeyDelegate = AcceptAllHostKeysDelegate()
-
-                print("[SSH] Channel initializer called, adding SSH handler")
 
                 return channel.pipeline.addHandlers([
                     NIOSSHHandler(
@@ -240,15 +173,12 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
             }
             .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
             .channelOption(ChannelOptions.socket(IPPROTO_TCP, TCP_NODELAY), value: 1)
-            .connectTimeout(.seconds(10))
+            .connectTimeout(.seconds(timeoutSeconds))
 
         do {
-            print("[SSH] Attempting TCP connection...")
             let channel = try await bootstrap.connect(host: host, port: Int(port)).get()
-            print("[SSH] TCP connection established!")
             return channel
         } catch {
-            print("[SSH] Connection failed to \(host):\(port) - \(error)")
             throw TransportError.connectionFailed("Could not connect to \(host):\(port). Check the hostname and ensure the server is reachable.")
         }
     }
@@ -277,6 +207,14 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
             self?.handleIncomingData(data)
         }
 
+        // Error callback to update transport state when the shell channel fails
+        let errorCallback: @Sendable (Error) -> Void = { [weak self] error in
+            guard let self = self else { return }
+            Task {
+                await self.stateActor.setState(.error(TransportError.connectionFailed(error.localizedDescription)))
+            }
+        }
+
         // Create a session channel on the event loop
         let childChannel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Channel, Error>) in
             // Must dispatch to event loop for NIO operations
@@ -292,7 +230,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
                     }
 
                     return childChannel.pipeline.addHandlers([
-                        ShellDataHandler(onData: dataCallback)
+                        ShellDataHandler(onData: dataCallback, onError: errorCallback)
                     ])
                 }
             }
@@ -466,33 +404,112 @@ final class PasswordAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unche
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
-        print("[SSH Auth] Available methods: \(availableMethods)")
-        print("[SSH Auth] Username: \(username), password length: \(password.count)")
-
         if !attemptedPassword && availableMethods.contains(.password) {
             attemptedPassword = true
-            print("[SSH Auth] Attempting password authentication...")
             nextChallengePromise.succeed(.init(
                 username: username,
                 serviceName: "ssh-connection",
                 offer: .password(.init(password: password))
             ))
         } else {
-            print("[SSH Auth] No more auth methods to try (attempted: \(attemptedPassword))")
             nextChallengePromise.succeed(nil)
         }
     }
 }
 
-/// Accept all host keys (for development - should validate in production)
-final class AcceptAllHostKeysDelegate: NIOSSHClientServerAuthenticationDelegate, Sendable {
+/// Host key validation using Trust On First Use (TOFU) model.
+/// First connection to a host: accept and store the key in Keychain.
+/// Subsequent connections: verify against stored key; reject on mismatch.
+final class KnownHostsDelegate: NIOSSHClientServerAuthenticationDelegate, Sendable {
+    private let host: String
+    private let port: Int
+
+    init(host: String, port: Int) {
+        self.host = host
+        self.port = port
+    }
+
     func validateHostKey(
         hostKey: NIOSSHPublicKey,
         validationCompletePromise: EventLoopPromise<Void>
     ) {
-        // Accept any host key
-        // TODO: Implement proper host key validation with known_hosts
-        validationCompletePromise.succeed(())
+        let keychainKey = "com.willo.knownhost.\(host):\(port)"
+        let hostKeyData: Data
+        do {
+            let encoder = JSONEncoder()
+            hostKeyData = try encoder.encode(CodableNIOSSHPublicKey(hostKey))
+        } catch {
+            validationCompletePromise.fail(TransportError.connectionFailed("Failed to encode host key"))
+            return
+        }
+
+        // Try to retrieve stored host key from Keychain
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainKey,
+            kSecAttrService as String: "com.willo.knownhosts",
+            kSecReturnData as String: true
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        if status == errSecSuccess, let storedData = result as? Data {
+            // We have a stored key — verify it matches
+            if storedData == hostKeyData {
+                validationCompletePromise.succeed(())
+            } else {
+                logger.error("Host key mismatch for \(self.host, privacy: .public):\(self.port) — possible MITM attack")
+                validationCompletePromise.fail(TransportError.connectionFailed(
+                    "Host key for \(host):\(port) has changed. This could indicate a man-in-the-middle attack. " +
+                    "If the server was reinstalled, remove the old key in Settings."
+                ))
+            }
+        } else {
+            // No stored key — Trust On First Use: accept and store
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: keychainKey,
+                kSecAttrService as String: "com.willo.knownhosts",
+                kSecValueData as String: hostKeyData,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            ]
+
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            if addStatus == errSecSuccess || addStatus == errSecDuplicateItem {
+                logger.info("Stored host key for \(self.host, privacy: .public):\(self.port) (TOFU)")
+                validationCompletePromise.succeed(())
+            } else {
+                logger.warning("Failed to store host key (status: \(addStatus)), accepting anyway")
+                validationCompletePromise.succeed(())
+            }
+        }
+    }
+
+    /// Remove the stored host key for a host (for key rotation or reinstall)
+    static func removeHostKey(host: String, port: Int) {
+        let keychainKey = "com.willo.knownhost.\(host):\(port)"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainKey,
+            kSecAttrService as String: "com.willo.knownhosts"
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// Wrapper for encoding NIOSSHPublicKey as JSON data for Keychain storage
+private struct CodableNIOSSHPublicKey: Codable {
+    let keyType: String
+    let keyData: Data
+
+    init(_ key: NIOSSHPublicKey) {
+        // Use the description as a stable identifier — includes type + base64 data
+        self.keyType = "\(type(of: key))"
+        // Serialize via the key's backing buffer representation
+        var buffer = ByteBufferAllocator().buffer(capacity: 256)
+        buffer.writeSSHHostKey(key)
+        self.keyData = Data(buffer.readableBytesView)
     }
 }
 
@@ -514,15 +531,12 @@ final class PublicKeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unch
     init(username: String, privateKeyData: Data, passphrase: String?) {
         self.username = username
         // TODO: Parse OpenSSH key format and store for use
-        print("[SSH Auth] Public key auth initialized (key parsing not yet implemented)")
     }
 
     func nextAuthenticationType(
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
-        print("[SSH Auth] Public key auth requested but not yet implemented")
-        print("[SSH Auth] Available methods: \(availableMethods)")
         // TODO: Implement OpenSSH key parsing
         // For now, fail gracefully so password auth can be tried
         nextChallengePromise.succeed(nil)
@@ -535,14 +549,12 @@ final class DefaultKeyAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unc
 
     init(username: String) {
         self.username = username
-        print("[SSH Auth] Agent/default key auth requested (not yet implemented)")
     }
 
     func nextAuthenticationType(
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
-        print("[SSH Auth] Default key auth not yet implemented, available: \(availableMethods)")
         // TODO: Implement SSH key loading from common paths
         nextChallengePromise.succeed(nil)
     }
@@ -555,9 +567,11 @@ final class ShellDataHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
 
     let onData: @Sendable (Data) -> Void
+    let onError: @Sendable (Error) -> Void
 
-    init(onData: @escaping @Sendable (Data) -> Void) {
+    init(onData: @escaping @Sendable (Data) -> Void, onError: @escaping @Sendable (Error) -> Void = { _ in }) {
         self.onData = onData
+        self.onError = onError
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -571,7 +585,8 @@ final class ShellDataHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("[SSH] Shell error: \(error)")
+        logger.error("Shell channel error: \(error.localizedDescription, privacy: .public)")
+        onError(error)
         context.close(promise: nil)
     }
 }
@@ -701,13 +716,11 @@ final class BridgeDataHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        print("[SSH] Bridge channel inactive (remote closed)")
-        // Notify the handle owner that the remote closed the channel
         handle?.notifyClose()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("[SSH] Bridge channel error: \(error)")
+        logger.error("Bridge channel error: \(error.localizedDescription, privacy: .public)")
         handle?.notifyClose()
         context.close(promise: nil)
     }
@@ -739,7 +752,11 @@ extension NIOSSHTransport {
         }.get()
 
         // We'll create the handle after we have the child channel
-        var bridgeHandle: BridgeChannelHandle!
+        // Use a class wrapper to safely capture the handle from the closure
+        final class HandleBox: @unchecked Sendable {
+            var handle: BridgeChannelHandle?
+        }
+        let handleBox = HandleBox()
 
         // Create child channel on the event loop
         let childChannel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Channel, Error>) in
@@ -760,13 +777,17 @@ extension NIOSSHTransport {
                         onData: onData,
                         onClose: onClose
                     )
-                    bridgeHandle = handle
+                    handleBox.handle = handle
 
                     return childChannel.pipeline.addHandlers([
                         BridgeDataHandler(handle: handle)
                     ])
                 }
             }
+        }
+
+        guard let bridgeHandle = handleBox.handle else {
+            throw TransportError.connectionFailed("Bridge channel handle was not created")
         }
 
         // Execute the command
@@ -776,7 +797,6 @@ extension NIOSSHTransport {
         // Mark handle as ready - flushes any early data
         bridgeHandle.markReady()
 
-        print("[SSH] Bridge channel opened for command: \(command.prefix(50))...")
         return bridgeHandle
     }
 }

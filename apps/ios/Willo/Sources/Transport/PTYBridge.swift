@@ -35,8 +35,13 @@ final class PTYBridge: @unchecked Sendable {
     /// Read buffer size
     private let bufferSize = 16384
 
-    /// Whether the bridge is active
-    private var isActive = false
+    /// Whether the bridge is active — protected by stateLock
+    private var _isActive = false
+    private let stateLock = NSLock()
+    var isActive: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isActive }
+        set { stateLock.lock(); _isActive = newValue; stateLock.unlock() }
+    }
 
     /// Read task
     private var readTask: Task<Void, Never>?

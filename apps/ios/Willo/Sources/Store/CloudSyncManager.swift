@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "CloudSync")
 
 /// Manages iCloud synchronization using NSUbiquitousKeyValueStore
 ///
@@ -28,6 +31,9 @@ final class CloudSyncManager: ObservableObject {
         case layouts = "willo.layouts.v1"
         case lastSyncTimestamp = "willo.lastSync"
     }
+
+    /// NSUbiquitousKeyValueStore total limit is 1MB; individual values max ~256KB
+    private let iCloudMaxValueSize = 256 * 1024  // 256 KB per value
 
     // MARK: - State
 
@@ -58,11 +64,11 @@ final class CloudSyncManager: ObservableObject {
         isAvailable = FileManager.default.ubiquityIdentityToken != nil
 
         if !isAvailable {
-            print("[CloudSync] iCloud not available - user may not be signed in")
+            logger.info("iCloud not available - user may not be signed in")
             return
         }
 
-        print("[CloudSync] iCloud available - setting up sync")
+        logger.info("iCloud available - setting up sync")
 
         // Listen for external changes from other devices
         NotificationCenter.default.addObserver(
@@ -91,7 +97,7 @@ final class CloudSyncManager: ObservableObject {
             return
         }
 
-        print("[CloudSync] External change detected - reason: \(changeReason), keys: \(changedKeys)")
+        logger.info("External change detected - reason: \(changeReason), keys: \(changedKeys, privacy: .public)")
 
         // changeReason: 0 = server change, 1 = initial sync, 2 = quota violation, 3 = account change
         switch changeReason {
@@ -100,10 +106,10 @@ final class CloudSyncManager: ObservableObject {
         case NSUbiquitousKeyValueStoreInitialSyncChange:
             handleInitialSync(changedKeys)
         case NSUbiquitousKeyValueStoreQuotaViolationChange:
-            print("[CloudSync] WARNING: iCloud quota exceeded!")
+            logger.warning("iCloud quota exceeded!")
             syncState = .error("iCloud storage quota exceeded")
         case NSUbiquitousKeyValueStoreAccountChange:
-            print("[CloudSync] iCloud account changed")
+            logger.warning("iCloud account changed")
             syncState = .error("iCloud account changed")
         default:
             break
@@ -129,7 +135,7 @@ final class CloudSyncManager: ObservableObject {
     }
 
     private func handleInitialSync(_ changedKeys: [String]) {
-        print("[CloudSync] Initial sync completed for keys: \(changedKeys)")
+        logger.info("Initial sync completed for keys: \(changedKeys, privacy: .public)")
         handleServerChange(changedKeys) // Same handling as server change
     }
 
@@ -161,13 +167,18 @@ final class CloudSyncManager: ObservableObject {
             }
 
             let data = try JSONEncoder().encode(syncableSessions)
+            guard data.count < iCloudMaxValueSize else {
+                logger.warning("Sessions data too large for iCloud (\(data.count) bytes)")
+                syncState = .error("Sessions data exceeds iCloud size limit")
+                return
+            }
             cloudStore.set(data, forKey: CloudKey.sessions.rawValue)
             cloudStore.synchronize()
 
             updateLastSyncDate()
-            print("[CloudSync] Synced \(sessions.count) sessions to iCloud")
+            logger.info("Synced \(sessions.count) sessions to iCloud")
         } catch {
-            print("[CloudSync] Failed to sync sessions: \(error)")
+            logger.error("Failed to sync sessions: \(error.localizedDescription, privacy: .public)")
             syncState = .error("Failed to sync sessions")
         }
     }
@@ -177,16 +188,16 @@ final class CloudSyncManager: ObservableObject {
         guard isAvailable else { return nil }
 
         guard let data = cloudStore.data(forKey: CloudKey.sessions.rawValue) else {
-            print("[CloudSync] No sessions in iCloud")
+            logger.debug("No sessions in iCloud")
             return nil
         }
 
         do {
             let sessions = try JSONDecoder().decode([SyncableSession].self, from: data)
-            print("[CloudSync] Loaded \(sessions.count) sessions from iCloud")
+            logger.info("Loaded \(sessions.count) sessions from iCloud")
             return sessions
         } catch {
-            print("[CloudSync] Failed to load sessions: \(error)")
+            logger.error("Failed to load sessions: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -201,7 +212,7 @@ final class CloudSyncManager: ObservableObject {
                 // Session exists locally - use the one with latest activity
                 if cloudSession.lastActivityAt > localSession.lastActivityAt {
                     // Cloud version is newer - update local
-                    print("[CloudSync] Updating session \(cloudSession.name) from iCloud (newer)")
+                    logger.debug("Updating session \(cloudSession.name, privacy: .public) from iCloud (newer)")
                     if let index = merged.firstIndex(where: { $0.id == cloudSession.id }) {
                         merged[index] = cloudSession.toWilloSession(
                             serverProfile: localSession.serverProfile,
@@ -212,7 +223,7 @@ final class CloudSyncManager: ObservableObject {
                 }
             } else {
                 // Session only exists in cloud - add it (will need profile resolution)
-                print("[CloudSync] Adding new session from iCloud: \(cloudSession.name)")
+                logger.info("Adding new session from iCloud: \(cloudSession.name, privacy: .public)")
                 // We can't add it directly without a resolved ServerProfile
                 // Mark for resolution in SessionStore
             }
@@ -246,13 +257,18 @@ final class CloudSyncManager: ObservableObject {
             }
 
             let data = try JSONEncoder().encode(syncableProfiles)
+            guard data.count < iCloudMaxValueSize else {
+                logger.warning("Profiles data too large for iCloud (\(data.count) bytes)")
+                syncState = .error("Profiles data exceeds iCloud size limit")
+                return
+            }
             cloudStore.set(data, forKey: CloudKey.serverProfiles.rawValue)
             cloudStore.synchronize()
 
             updateLastSyncDate()
-            print("[CloudSync] Synced \(profiles.count) profiles to iCloud")
+            logger.info("Synced \(profiles.count) profiles to iCloud")
         } catch {
-            print("[CloudSync] Failed to sync profiles: \(error)")
+            logger.error("Failed to sync profiles: \(error.localizedDescription, privacy: .public)")
             syncState = .error("Failed to sync profiles")
         }
     }
@@ -262,16 +278,16 @@ final class CloudSyncManager: ObservableObject {
         guard isAvailable else { return nil }
 
         guard let data = cloudStore.data(forKey: CloudKey.serverProfiles.rawValue) else {
-            print("[CloudSync] No profiles in iCloud")
+            logger.debug("No profiles in iCloud")
             return nil
         }
 
         do {
             let profiles = try JSONDecoder().decode([SyncableServerProfile].self, from: data)
-            print("[CloudSync] Loaded \(profiles.count) profiles from iCloud")
+            logger.info("Loaded \(profiles.count) profiles from iCloud")
             return profiles
         } catch {
-            print("[CloudSync] Failed to load profiles: \(error)")
+            logger.error("Failed to load profiles: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -280,7 +296,7 @@ final class CloudSyncManager: ObservableObject {
     /// This is the preferred method for initial app load to ensure we get the latest data
     func loadServerProfilesWithSync() -> [SyncableServerProfile]? {
         guard isAvailable else {
-            print("[CloudSync] iCloud not available for profile sync")
+            logger.debug("iCloud not available for profile sync")
             return nil
         }
 
@@ -304,14 +320,14 @@ final class CloudSyncManager: ObservableObject {
 
                 if cloudLastConnected > localLastConnected {
                     // Cloud version is newer - update local (preserve local auth)
-                    print("[CloudSync] Updating profile \(cloudProfile.displayName) from iCloud (newer)")
+                    logger.debug("Updating profile \(cloudProfile.displayName, privacy: .public) from iCloud (newer)")
                     if let index = merged.firstIndex(where: { $0.id == cloudProfile.id }) {
                         merged[index] = cloudProfile.toServerProfile(preservingAuthFrom: localProfile)
                     }
                 }
             } else {
                 // Profile only exists in cloud - add it
-                print("[CloudSync] Adding new profile from iCloud: \(cloudProfile.displayName)")
+                logger.info("Adding new profile from iCloud: \(cloudProfile.displayName, privacy: .public)")
                 merged.append(cloudProfile.toServerProfile(preservingAuthFrom: nil))
             }
         }
@@ -327,13 +343,18 @@ final class CloudSyncManager: ObservableObject {
 
         do {
             let data = try JSONEncoder().encode(layouts)
+            guard data.count < iCloudMaxValueSize else {
+                logger.warning("Layouts data too large for iCloud (\(data.count) bytes)")
+                syncState = .error("Layouts data exceeds iCloud size limit")
+                return
+            }
             cloudStore.set(data, forKey: CloudKey.layouts.rawValue)
             cloudStore.synchronize()
 
             updateLastSyncDate()
-            print("[CloudSync] Synced \(layouts.count) user layouts to iCloud")
+            logger.info("Synced \(layouts.count) user layouts to iCloud")
         } catch {
-            print("[CloudSync] Failed to sync layouts: \(error)")
+            logger.error("Failed to sync layouts: \(error.localizedDescription, privacy: .public)")
             syncState = .error("Failed to sync layouts")
         }
     }
@@ -343,16 +364,16 @@ final class CloudSyncManager: ObservableObject {
         guard isAvailable else { return nil }
 
         guard let data = cloudStore.data(forKey: CloudKey.layouts.rawValue) else {
-            print("[CloudSync] No layouts in iCloud")
+            logger.debug("No layouts in iCloud")
             return nil
         }
 
         do {
             let layouts = try JSONDecoder().decode([UserLayout].self, from: data)
-            print("[CloudSync] Loaded \(layouts.count) layouts from iCloud")
+            logger.info("Loaded \(layouts.count) layouts from iCloud")
             return layouts
         } catch {
-            print("[CloudSync] Failed to load layouts: \(error)")
+            logger.error("Failed to load layouts: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -367,14 +388,14 @@ final class CloudSyncManager: ObservableObject {
                 // Layout exists locally - use the one created most recently
                 if cloudLayout.createdAt > localLayout.createdAt {
                     // Cloud version is newer - update local
-                    print("[CloudSync] Updating layout \(cloudLayout.name) from iCloud (newer)")
+                    logger.debug("Updating layout \(cloudLayout.name, privacy: .public) from iCloud (newer)")
                     if let index = merged.firstIndex(where: { $0.id == cloudLayout.id }) {
                         merged[index] = cloudLayout
                     }
                 }
             } else {
                 // Layout only exists in cloud - add it
-                print("[CloudSync] Adding new layout from iCloud: \(cloudLayout.name)")
+                logger.info("Adding new layout from iCloud: \(cloudLayout.name, privacy: .public)")
                 merged.append(cloudLayout)
             }
         }
