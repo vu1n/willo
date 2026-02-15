@@ -1,5 +1,8 @@
 import MetalKit
 import SwiftUI
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "TerminalView")
 
 #if os(iOS)
 /// SwiftUI wrapper for WilloTerminalView with transport integration
@@ -88,7 +91,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         // Wire up resize callback
         let resizeCallback = onResize
         view.onResize = { cols, rows in
-            print("[TerminalView] Resize callback: \(cols)x\(rows)")
+            logger.debug("Resize callback: \(cols)x\(rows)")
             resizeCallback?(cols, rows)
         }
 
@@ -110,17 +113,15 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
     func updateUIView(_ uiView: WilloTerminalView, context: Context) {
         // Check if font size changed
         let delta = abs(fontSize - context.coordinator.currentFontSize)
-        print("[Representable] updateUIView - fontSize: \(fontSize), stored: \(context.coordinator.currentFontSize), delta: \(delta)")
 
         if delta > 0.5 {
-            print("[Representable] Font size changed! Calling updateFontSize(\(fontSize))")
+            logger.info("Font size changed to \(fontSize)")
             context.coordinator.currentFontSize = fontSize
             uiView.updateFontSize(fontSize)
 
             // Force layout to ensure bounds are correct before resize calculation
             uiView.setNeedsLayout()
             uiView.layoutIfNeeded()
-            print("[Representable] Layout forced, bounds now: \(uiView.bounds.size)")
         }
     }
 
@@ -135,15 +136,14 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         let capturedSessionStore = sessionStore
 
         if let moshTransport = transport as? MoshTransport {
-            print("[TerminalView] Setting up Mosh data callback")
+            logger.info("Setting up Mosh data callback")
             moshTransport.setDataCallback { [weak coordinator] data in
                 // Must dispatch to main thread since callback comes from background
                 DispatchQueue.main.async {
-                    print("[TerminalView] Mosh data received: \(data.count) bytes, coordinator=\(coordinator != nil), view=\(coordinator?.terminalView != nil)")
                     if let view = coordinator?.terminalView {
                         view.feed(data)
                     } else {
-                        print("[TerminalView] ERROR: terminalView is nil!")
+                        logger.error("terminalView is nil when receiving Mosh data")
                     }
                     // Process activity detection
                     Self.processActivityDetection(
@@ -155,15 +155,14 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
                 }
             }
         } else if let sshTransport = transport as? NIOSSHTransport {
-            print("[TerminalView] Setting up SSH data callback")
+            logger.info("Setting up SSH data callback")
             sshTransport.setDataCallback { [weak coordinator] data in
                 // Must dispatch to main thread since callback comes from NIO event loop
                 DispatchQueue.main.async {
-                    print("[TerminalView] SSH data received: \(data.count) bytes, coordinator=\(coordinator != nil), view=\(coordinator?.terminalView != nil)")
                     if let view = coordinator?.terminalView {
                         view.feed(data)
                     } else {
-                        print("[TerminalView] ERROR: terminalView is nil!")
+                        logger.error("terminalView is nil when receiving SSH data")
                     }
                     // Process activity detection
                     Self.processActivityDetection(
@@ -177,7 +176,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
         } else {
             // Fallback for other transport types - use AsyncStream
             context.coordinator.dataTask = Task { @MainActor in
-                print("[TerminalView] Starting data stream subscription (fallback)")
+                logger.info("Starting data stream subscription (fallback)")
                 for await data in transport.dataStream {
                     if let view = context.coordinator.terminalView {
                         view.feed(data)
@@ -190,7 +189,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
                         sessionStore: capturedSessionStore
                     )
                 }
-                print("[TerminalView] Data stream ended")
+                logger.info("Data stream ended")
             }
         }
     }
@@ -213,7 +212,7 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
             // Process output through detector
             if let newState = detector.processOutput(data) {
                 // State changed - update session store
-                print("[ActivityDetector] State changed to: \(newState)")
+                logger.debug("Activity state changed to: \(String(describing: newState), privacy: .public)")
 
                 // Check if session is in background (not active)
                 let isBackground = sessionStore.activeSessionId != sessionId
@@ -221,7 +220,6 @@ struct WilloTerminalViewRepresentable: UIViewRepresentable {
                 if isBackground {
                     // Session is in background - increment unread counter
                     sessionStore.incrementUnread(sessionId)
-                    print("[ActivityDetector] Incremented unread for background session")
                 } else {
                     // Session is active - just update state
                     sessionStore.setActivityState(sessionId, state: newState)

@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "SessionStore")
 
 /// Manages WilloSession instances (app-level tabs)
 ///
@@ -97,7 +100,7 @@ final class SessionStore: ObservableObject {
     ) async {
         // Don't start duplicate bridges
         guard zellijBridges[sessionId] == nil else {
-            print("[SessionStore] Bridge already exists for session \(sessionId)")
+            logger.debug("Bridge already exists for session \(sessionId, privacy: .public)")
             return
         }
 
@@ -389,11 +392,11 @@ final class SessionStore: ObservableObject {
 
     private func mergeCloudSessions() {
         guard let cloudSessions = cloudSync.loadSessions() else {
-            print("[SessionStore] No cloud sessions to merge")
+            logger.debug("No cloud sessions to merge")
             return
         }
 
-        print("[SessionStore] Merging \(cloudSessions.count) sessions from iCloud")
+        logger.info("Merging \(cloudSessions.count) sessions from iCloud")
 
         // For each cloud session, check if we have it locally
         for cloudSession in cloudSessions {
@@ -401,7 +404,7 @@ final class SessionStore: ObservableObject {
                 // Session exists - merge by timestamp (cloud wins if newer)
                 let localSession = sessions[localIndex]
                 if cloudSession.lastActivityAt > localSession.lastActivityAt {
-                    print("[SessionStore] Updating session \(cloudSession.name) from iCloud")
+                    logger.debug("Updating session \(cloudSession.name, privacy: .public) from iCloud")
                     sessions[localIndex] = cloudSession.toWilloSession(
                         serverProfile: localSession.serverProfile,
                         connectionState: localSession.connectionState,
@@ -410,7 +413,7 @@ final class SessionStore: ObservableObject {
                 }
             } else {
                 // New session from cloud - will need profile resolution
-                print("[SessionStore] New session from iCloud: \(cloudSession.name) - needs profile resolution")
+                logger.info("New session from iCloud: \(cloudSession.name, privacy: .public) - needs profile resolution")
                 // Store the cloud session temporarily and resolve after profiles load
                 // For now, we'll skip adding it until profiles are resolved
             }
@@ -431,7 +434,7 @@ final class SessionStore: ObservableObject {
         do {
             sessions = try JSONDecoder().decode([WilloSession].self, from: data)
         } catch {
-            print("[SessionStore] Failed to load sessions: \(error)")
+            logger.error("Failed to load sessions: \(error.localizedDescription, privacy: .public)")
         }
 
         // Load active session ID
@@ -456,7 +459,7 @@ final class SessionStore: ObservableObject {
             let data = try JSONEncoder().encode(sessions)
             UserDefaults.standard.set(data, forKey: Self.sessionsKey)
         } catch {
-            print("[SessionStore] Failed to save sessions: \(error)")
+            logger.error("Failed to save sessions: \(error.localizedDescription, privacy: .public)")
         }
 
         if let activeId = activeSessionId {
@@ -474,7 +477,7 @@ final class SessionStore: ObservableObject {
         for (index, session) in sessions.enumerated() {
             // Match by server profile ID (stored in placeholder during decode)
             if let matchingProfile = profiles.first(where: { $0.id == session.serverProfile.id }) {
-                print("[SessionStore] Resolved profile for session '\(session.name)': \(matchingProfile.displayName)")
+                logger.debug("Resolved profile for session '\(session.name, privacy: .public)': \(matchingProfile.displayName, privacy: .public)")
                 // Create a new session with the resolved profile
                 sessions[index] = WilloSession(
                     id: session.id,
@@ -491,7 +494,7 @@ final class SessionStore: ObservableObject {
                 )
             } else if session.serverProfile.hostname.isEmpty {
                 // Profile was deleted or not found - mark for removal
-                print("[SessionStore] Could not resolve profile for session '\(session.name)' (ID: \(session.serverProfile.id)) - marking for removal")
+                logger.warning("Could not resolve profile for session '\(session.name, privacy: .public)' (ID: \(session.serverProfile.id, privacy: .public)) - marking for removal")
                 sessionsToRemove.append(session.id)
             }
         }
