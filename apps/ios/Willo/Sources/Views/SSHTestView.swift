@@ -10,7 +10,7 @@ struct SSHTestView: View {
     @State private var password: String = ""
     @State private var connectionStatus: String = "Not connected"
     @State private var outputText: String = ""
-    @State private var transport: CitadelSSHTransport?
+    @State private var transport: NIOSSHTransport?
     @State private var isConnecting = false
     @State private var inputText: String = ""
 
@@ -140,7 +140,7 @@ struct SSHTestView: View {
             terminalRows: 24
         )
 
-        let newTransport = CitadelSSHTransport(config: config)
+        let newTransport = NIOSSHTransport(config: config)
 
         // Initialize streams before connecting (fixes race condition)
         newTransport.initializeStreams()
