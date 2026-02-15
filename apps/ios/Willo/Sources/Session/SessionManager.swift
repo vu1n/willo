@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "Session")
 
 /// Manages terminal sessions, coordinating Ghostty surfaces with transports
 ///
@@ -23,8 +26,35 @@ final class SessionManager: ObservableObject {
     /// Session storage
     private var sessionConfigs: [UUID: SessionConfig] = [:]
 
+    /// Network monitor for auto-reconnect
+    private var networkCancellable: AnyCancellable?
+
     init(appManager: GhosttyAppManager) {
         self.appManager = appManager
+        setupNetworkMonitoring()
+    }
+
+    /// Monitor network connectivity and trigger reconnection for disconnected sessions
+    private func setupNetworkMonitoring() {
+        networkCancellable = NetworkMonitor.shared.$isConnected
+            .removeDuplicates()
+            .filter { $0 } // Only when network becomes available
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                Task { @MainActor in
+                    await self.reconnectDisconnectedSessions()
+                }
+            }
+    }
+
+    /// Attempt to reconnect all sessions that were disconnected due to network loss
+    private func reconnectDisconnectedSessions() async {
+        for session in sessions where session.state == .disconnected {
+            guard sessionConfigs[session.id] != nil else { continue }
+            Task {
+                try? await reconnect(session)
+            }
+        }
     }
 
     // MARK: - Session Management
@@ -46,7 +76,7 @@ final class SessionManager: ObservableObject {
             try ptyBridge.configureTerminal()
         } catch {
             // PTY not available (physical iOS device) - continue without it
-            print("[SessionManager] PTY unavailable (expected on physical device): \(error.localizedDescription)")
+            logger.debug("PTY unavailable (expected on physical device)")
         }
 
         // Create session
@@ -89,7 +119,7 @@ final class SessionManager: ObservableObject {
             // Set initial terminal size from config (not hardcoded)
             let cols = session.config.terminalCols
             let rows = session.config.terminalRows
-            print("[SessionManager] Setting initial terminal size: \(cols)x\(rows)")
+            logger.debug("Initial terminal size: \(cols)x\(rows)")
             try await session.resize(cols: cols, rows: rows)
 
             session.setState(.connected)
@@ -97,6 +127,32 @@ final class SessionManager: ObservableObject {
             session.setState(.error(error))
             throw error
         }
+    }
+
+    /// Reconnect a disconnected session with exponential backoff
+    func reconnect(_ session: TerminalSession, maxAttempts: Int = 5) async throws {
+        let backoff = ExponentialBackoff()
+
+        for attempt in 1...maxAttempts {
+            session.setState(.reconnecting(attempt: attempt))
+            logger.info("Reconnection attempt \(attempt)/\(maxAttempts)")
+
+            do {
+                try await session.transport.connect()
+                let cols = session.config.terminalCols
+                let rows = session.config.terminalRows
+                try await session.resize(cols: cols, rows: rows)
+                session.setState(.connected)
+                logger.info("Reconnected successfully on attempt \(attempt)")
+                return
+            } catch {
+                let delay = backoff.delay(for: attempt)
+                logger.debug("Reconnection attempt \(attempt) failed, retrying in \(delay)s")
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        session.setState(.error(TransportError.connectionFailed("Reconnection failed after \(maxAttempts) attempts")))
     }
 
     /// Disconnect a session
@@ -156,9 +212,9 @@ final class SessionManager: ObservableObject {
         try await sshTransport.connectForBootstrap()
 
         // Bootstrap mosh-server to get key and port
-        print("[Mosh] Running mosh-server bootstrap...")
+        logger.info("Running mosh-server bootstrap")
         let bootstrap = try await MoshTransport.bootstrap(using: sshTransport)
-        print("[Mosh] Bootstrap successful - port: \(bootstrap.port)")
+        logger.info("Bootstrap successful")
 
         // Disconnect SSH (we'll use Mosh UDP now)
         try await sshTransport.disconnect()
@@ -180,7 +236,7 @@ final class SessionManager: ObservableObject {
             try ptyBridge.open()
             try ptyBridge.configureTerminal()
         } catch {
-            print("[SessionManager] PTY unavailable (expected on physical device): \(error.localizedDescription)")
+            logger.debug("PTY unavailable (expected on physical device)")
         }
 
         // Create session with Mosh transport

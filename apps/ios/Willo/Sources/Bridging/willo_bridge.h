@@ -72,7 +72,8 @@ typedef struct {
     bool mouse_event_any;       ///< CSI ?1003h - any event tracking
     bool mouse_format_sgr;      ///< CSI ?1006h - SGR extended mouse format
     bool alt_screen;            ///< CSI ?1049h - alternate screen buffer active
-    uint8_t _padding[7];        ///< Alignment padding
+    bool synchronized_output;   ///< CSI ?2026h - synchronized output mode
+    uint8_t _padding[6];        ///< Alignment padding
 } WilloTerminalModes;
 
 // =============================================================================

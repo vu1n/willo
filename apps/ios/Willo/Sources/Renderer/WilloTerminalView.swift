@@ -1,10 +1,13 @@
 import MetalKit
+import os.log
 #if os(iOS)
 import UIKit
 import GameController
 #else
 import AppKit
 #endif
+
+private let logger = Logger(subsystem: "com.willo.app", category: "Renderer")
 
 #if os(iOS)
 /// Custom Metal-based terminal view for Willo
@@ -115,7 +118,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     private func commonInit() {
         guard let device = self.device else {
-            print("WilloTerminalView: No Metal device available")
+            logger.error("No Metal device available")
             return
         }
 
@@ -145,7 +148,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         if let atlas = glyphAtlas {
             cellWidth = atlas.cellWidth > 0 ? atlas.cellWidth : 12.0
             cellHeight = atlas.cellHeight > 0 ? atlas.cellHeight : 24.0
-            print("[Terminal] Cell size from atlas: \(cellWidth)x\(cellHeight)")
+            logger.debug("Cell size from atlas: \(self.cellWidth)x\(self.cellHeight)")
         }
 
         // Create pipeline state - may fail if shaders aren't compiled
@@ -159,7 +162,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Check if Metal rendering is fully available
         metalAvailable = pipelineState != nil && commandQueue != nil
         if !metalAvailable {
-            print("WilloTerminalView: Metal rendering unavailable, using fallback")
+            logger.warning("Metal rendering unavailable, using fallback")
         }
 
         // Setup hardware keyboard detection
@@ -175,7 +178,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     private func setupKeyboardDetection() {
         // Check initial keyboard state
         hasHardwareKeyboard = GCKeyboard.coalesced != nil
-        print("[Keyboard] Initial state - hardware keyboard: \(hasHardwareKeyboard)")
+        logger.debug("Hardware keyboard: \(self.hasHardwareKeyboard)")
 
         // Subscribe to keyboard connection notifications
         NotificationCenter.default.addObserver(
@@ -194,12 +197,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     @objc private func keyboardDidConnect(_ notification: Notification) {
         hasHardwareKeyboard = true
-        print("[Keyboard] Hardware keyboard connected")
+        logger.debug("Hardware keyboard connected")
     }
 
     @objc private func keyboardDidDisconnect(_ notification: Notification) {
         hasHardwareKeyboard = GCKeyboard.coalesced != nil
-        print("[Keyboard] Hardware keyboard disconnected, remaining: \(hasHardwareKeyboard)")
+        logger.debug("Hardware keyboard disconnected, remaining: \(self.hasHardwareKeyboard)")
 
         // Show software keyboard if no hardware keyboard and we should auto-show
         if !hasHardwareKeyboard && shouldAutoShowKeyboard && !isFirstResponder {
@@ -291,7 +294,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Update preferred frame rate based on screen capabilities
         if let window = self.window {
             self.preferredFramesPerSecond = window.screen.maximumFramesPerSecond
-            print("[Terminal] Updated frame rate to \(window.screen.maximumFramesPerSecond)Hz")
+            logger.debug("Frame rate: \(window.screen.maximumFramesPerSecond)Hz")
         }
 
         // Auto-show software keyboard when no hardware keyboard is attached
@@ -314,18 +317,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         // Recalculate grid size on layout changes
         let size = bounds.size
-        print("[Terminal] layoutSubviews called - bounds: \(size), cellSize: \(cellWidth)x\(cellHeight)")
-        guard size.width > 0 && size.height > 0 else {
-            print("[Terminal] layoutSubviews - bounds are zero, skipping")
-            return
-        }
+        guard size.width > 0 && size.height > 0 else { return }
 
         let newCols = max(1, Int(size.width / cellWidth))
         let newRows = max(1, Int(size.height / cellHeight))
 
-        print("[Terminal] layoutSubviews - calculated grid: \(newCols)x\(newRows), current: \(cols)x\(rows)")
         if newCols != cols || newRows != rows {
-            print("[Terminal] layoutSubviews: \(size), grid: \(newCols)x\(newRows)")
             resizeGrid(rows: newRows, cols: newCols)
         }
     }
@@ -337,22 +334,22 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         let library: MTLLibrary?
         if let bundleLibrary = try? device.makeDefaultLibrary(bundle: Bundle.module) {
             library = bundleLibrary
-            print("WilloTerminalView: Loaded Metal library from Bundle.module")
         } else if let defaultLibrary = device.makeDefaultLibrary() {
             library = defaultLibrary
-            print("WilloTerminalView: Loaded Metal library from default bundle")
         } else {
-            print("WilloTerminalView: Failed to load Metal library from any bundle")
+            logger.error("Failed to load Metal library from any bundle")
             library = nil
         }
 
         guard let library = library else {
-            print("WilloTerminalView: No Metal library available")
             return
         }
 
-        let vertexFunction = library.makeFunction(name: "terminalVertex")
-        let fragmentFunction = library.makeFunction(name: "terminalFragment")
+        guard let vertexFunction = library.makeFunction(name: "terminalVertex"),
+              let fragmentFunction = library.makeFunction(name: "terminalFragment") else {
+            logger.error("Failed to load shader functions from Metal library")
+            return
+        }
 
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
         pipelineDescriptor.vertexFunction = vertexFunction
@@ -395,7 +392,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
-            print("WilloTerminalView: Failed to create pipeline state: \(error)")
+            logger.error("Failed to create pipeline state: \(error.localizedDescription, privacy: .public)")
         }
 
         // Create uniform buffer
@@ -442,13 +439,11 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Feed data to the terminal (ANSI sequences, UTF-8 text)
     func feed(_ data: Data) {
-        print("[TerminalView] feed() called with \(data.count) bytes, metalAvailable=\(metalAvailable), pipelineState=\(pipelineState != nil)")
         terminal?.feed(data)
 
         // Always update cell data from terminal state
         updateCellsFromTerminal()
         needsRender = true
-        print("[TerminalView] After feed: cells.count=\(cells.count), grid=\(cols)x\(rows)")
 
         // Check if we're in synchronized output mode
         // If so, defer the display update to allow batching, but schedule a fallback
@@ -506,7 +501,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Resize the terminal grid
     func resizeGrid(rows: Int, cols: Int) {
-        print("[Terminal] Resizing grid to \(cols)x\(rows)")
+        guard (1...500).contains(rows), (1...500).contains(cols) else {
+            logger.warning("Invalid grid dimensions: \(cols)x\(rows)")
+            return
+        }
         self.rows = rows
         self.cols = cols
 
@@ -521,61 +519,38 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Update font size and rebuild glyph atlas
     func updateFontSize(_ newSize: CGFloat) {
-        guard let device = self.device else {
-            print("[Terminal] updateFontSize - NO DEVICE!")
-            return
-        }
+        guard let device = self.device else { return }
 
         let clampedSize = max(14.0, min(32.0, newSize))
-        print("[Terminal] ===== updateFontSize START =====")
-        print("[Terminal] Requested: \(newSize)pt, clamped: \(clampedSize)pt")
-        print("[Terminal] BEFORE - cellWidth: \(cellWidth), cellHeight: \(cellHeight), grid: \(cols)x\(rows)")
 
         // Rebuild glyph atlas with new size
         glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
 
-        // Update cell metrics - ALWAYS update, don't keep old values
+        // Update cell metrics
         if let atlas = glyphAtlas {
-            let oldWidth = cellWidth
-            let oldHeight = cellHeight
             cellWidth = atlas.cellWidth
             cellHeight = atlas.cellHeight
-            print("[Terminal] Atlas returned: cellWidth=\(atlas.cellWidth), cellHeight=\(atlas.cellHeight)")
-            print("[Terminal] Cell size changed: \(oldWidth)x\(oldHeight) → \(cellWidth)x\(cellHeight)")
 
-            // Sanity check - if atlas returns 0, something is very wrong
             if cellWidth <= 0 || cellHeight <= 0 {
-                print("[Terminal] ERROR: Atlas returned invalid cell size! Using fallback.")
+                logger.error("Atlas returned invalid cell size, using fallback")
                 cellWidth = ceil(clampedSize * 0.6)
                 cellHeight = ceil(clampedSize * 1.2)
-                print("[Terminal] Fallback cell size: \(cellWidth)x\(cellHeight)")
             }
         } else {
-            print("[Terminal] ERROR: GlyphAtlas creation failed!")
+            logger.error("GlyphAtlas creation failed")
             cellWidth = ceil(clampedSize * 0.6)
             cellHeight = ceil(clampedSize * 1.2)
         }
 
         // Recalculate grid dimensions based on new cell size
         let size = bounds.size
-        print("[Terminal] View bounds: \(size.width)x\(size.height)")
-
         if size.width > 0 && size.height > 0 {
             let newCols = max(1, Int(size.width / cellWidth))
             let newRows = max(1, Int(size.height / cellHeight))
-
-            print("[Terminal] Grid calculation: \(size.width)/\(cellWidth) = \(newCols) cols")
-            print("[Terminal] Grid calculation: \(size.height)/\(cellHeight) = \(newRows) rows")
-            print("[Terminal] Current grid: \(cols)x\(rows), New grid: \(newCols)x\(newRows)")
-
-            // ALWAYS resize on font change - even if grid dimensions happen to match
-            print("[Terminal] RESIZING GRID: \(cols)x\(rows) → \(newCols)x\(newRows)")
             resizeGrid(rows: newRows, cols: newCols)
         } else {
-            print("[Terminal] WARNING: bounds are zero (\(size)), skipping resize")
             setNeedsDisplay()
         }
-        print("[Terminal] ===== updateFontSize END =====")
     }
 
     // MARK: - Frame Coalescing
@@ -625,7 +600,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         let newCols = max(1, Int(pointWidth / cellWidth))
         let newRows = max(1, Int(pointHeight / cellHeight))
 
-        print("[Terminal] Drawable size changed: \(size), scale: \(scale), grid: \(newCols)x\(newRows)")
+        logger.debug("Drawable size changed, grid: \(newCols)x\(newRows)")
 
         if newCols != cols || newRows != rows {
             resizeGrid(rows: newRows, cols: newCols)
@@ -643,7 +618,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         // If Metal rendering isn't available, just clear the view
         guard metalAvailable else {
-            print("[TerminalView] draw() - Metal not available!")
+            logger.debug("draw() - Metal not available")
             // Fallback: Just present a cleared drawable
             guard let drawable = currentDrawable,
                   let commandQueue = commandQueue,
@@ -668,7 +643,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         // Check drawable availability separately to provide better diagnostics
         guard let drawable = currentDrawable else {
-            print("[TerminalView] draw() - No drawable available, bounds=\(bounds.size)")
+            logger.debug("No drawable available")
             return
         }
 
@@ -849,10 +824,13 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         renderEncoder.endEncoding()
 
         commandBuffer.present(drawable)
+        // Clear dirty flag after GPU finishes reading shared buffers
+        commandBuffer.addCompletedHandler { [weak terminal] _ in
+            DispatchQueue.main.async {
+                terminal?.clearDirty()
+            }
+        }
         commandBuffer.commit()
-
-        // Clear dirty flag after successful render
-        terminal.clearDirty()
     }
 
     // MARK: - Color Helpers
@@ -902,15 +880,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     func insertText(_ text: String) {
-        print("[Input] insertText: '\(text)' (\(text.count) chars)")
         if let data = text.data(using: .utf8) {
             onInput?(data)
         }
     }
 
     func deleteBackward() {
-        // Send backspace (DEL character 0x7F)
-        print("[Input] deleteBackward called - sending 0x7F")
         let backspace = Data([0x7F])
         onInput?(backspace)
     }
@@ -1007,8 +982,6 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         let button = isDrag ? 32 : 0
         let suffix = isPress ? "M" : "m"
         let sequence = "\u{1B}[<\(button);\(clampedCol);\(clampedRow)\(suffix)"
-
-        print("[Mouse] \(isDrag ? "Drag" : (isPress ? "Press" : "Release")) at (\(location.x), \(location.y)) -> cell (\(clampedCol), \(clampedRow)) -> \(sequence.debugDescription)")
 
         if let data = sequence.data(using: .utf8) {
             onInput?(data)
@@ -1116,7 +1089,6 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     @objc private func handleEnter() {
-        print("[Input] handleEnter called - sending CR (0x0D)")
         onInput?(Data([0x0D]))  // Carriage Return
     }
 
@@ -1241,14 +1213,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     }
 
     @objc private func handleDelete() {
-        // Forward delete (fn+backspace on Mac) sends ESC[3~
-        print("[Input] handleDelete called - sending ESC[3~")
         sendEscapeSequence("[3~")
     }
 
     @objc private func handleBackspace() {
-        // Explicit backspace handler for hardware keyboards
-        print("[Input] handleBackspace called - sending 0x7F")
         let backspace = Data([0x7F])
         onInput?(backspace)
     }
@@ -1264,90 +1232,99 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     // MARK: - Thumbnail Capture
 
-    /// Capture the current Metal framebuffer as a UIImage
-    /// Returns a scaled-down thumbnail (1/4 size) for memory efficiency
+    /// Capture the current Metal framebuffer as a UIImage thumbnail.
+    /// Reads only a 1/4 size region to avoid ~90MB full-resolution readback.
     func captureSnapshot() -> UIImage? {
-        guard let drawable = currentDrawable else {
-            print("[WilloTerminalView] captureSnapshot: No drawable available")
+        guard let drawable = currentDrawable,
+              let device = device,
+              let commandQueue = commandQueue else {
             return nil
         }
-        let texture = drawable.texture
+        let sourceTexture = drawable.texture
 
-        // Get texture dimensions
-        let textureWidth = texture.width
-        let textureHeight = texture.height
+        // Target thumbnail size (1/4 resolution)
+        let thumbWidth = max(1, sourceTexture.width / 4)
+        let thumbHeight = max(1, sourceTexture.height / 4)
 
-        // Scale down to 1/4 size for thumbnails
-        let thumbnailWidth = textureWidth / 4
-        let thumbnailHeight = textureHeight / 4
-
-        // Create a temporary texture descriptor for reading
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: texture.pixelFormat,
-            width: textureWidth,
-            height: textureHeight,
+        // Create a small shared-mode texture for CPU readback
+        let thumbDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: sourceTexture.pixelFormat,
+            width: thumbWidth,
+            height: thumbHeight,
             mipmapped: false
         )
-        descriptor.usage = [.shaderRead, .renderTarget]
-        descriptor.storageMode = .shared
+        thumbDesc.usage = [.shaderRead, .shaderWrite, .renderTarget]
+        thumbDesc.storageMode = .shared
 
-        // Read pixel data from the drawable texture
-        let bytesPerPixel = 4  // BGRA8Unorm
-        let bytesPerRow = bytesPerPixel * textureWidth
-        let dataSize = bytesPerRow * textureHeight
+        guard let thumbTexture = device.makeTexture(descriptor: thumbDesc) else {
+            return nil
+        }
+
+        // Use a blit to copy from source to thumbnail (GPU-side downscale)
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
+            return nil
+        }
+
+        blitEncoder.copy(
+            from: sourceTexture,
+            sourceSlice: 0,
+            sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: sourceTexture.width, height: sourceTexture.height, depth: 1),
+            to: thumbTexture,
+            destinationSlice: 0,
+            destinationLevel: 0,
+            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+        )
+        blitEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        // Read pixel data from the small thumbnail texture (~1.5MB vs ~90MB)
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * thumbWidth
+        let dataSize = bytesPerRow * thumbHeight
         var pixelData = [UInt8](repeating: 0, count: dataSize)
 
-        // Get the texture data
-        let region = MTLRegionMake2D(0, 0, textureWidth, textureHeight)
-        texture.getBytes(
+        let region = MTLRegionMake2D(0, 0, thumbWidth, thumbHeight)
+        thumbTexture.getBytes(
             &pixelData,
             bytesPerRow: bytesPerRow,
             from: region,
             mipmapLevel: 0
         )
 
-        // Create a CGImage from the pixel data
+        // Create CGImage from the small pixel data
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
             .union(.byteOrder32Little)
 
-        guard let dataProvider = CGDataProvider(
-            data: Data(pixelData) as CFData
-        ) else {
-            print("[WilloTerminalView] captureSnapshot: Failed to create data provider")
+        guard let dataProvider = CGDataProvider(data: Data(pixelData) as CFData),
+              let cgImage = CGImage(
+                  width: thumbWidth,
+                  height: thumbHeight,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: bytesPerRow,
+                  space: colorSpace,
+                  bitmapInfo: bitmapInfo,
+                  provider: dataProvider,
+                  decode: nil,
+                  shouldInterpolate: true,
+                  intent: .defaultIntent
+              ) else {
             return nil
         }
 
-        guard let cgImage = CGImage(
-            width: textureWidth,
-            height: textureHeight,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo,
-            provider: dataProvider,
-            decode: nil,
-            shouldInterpolate: true,
-            intent: .defaultIntent
-        ) else {
-            print("[WilloTerminalView] captureSnapshot: Failed to create CGImage")
-            return nil
-        }
-
-        // Scale down to thumbnail size using UIGraphicsImageRenderer
-        let thumbnailSize = CGSize(width: thumbnailWidth, height: thumbnailHeight)
-        let renderer = UIGraphicsImageRenderer(size: thumbnailSize)
-        let thumbnail = renderer.image { context in
-            // Flip the image (Metal textures are upside down)
-            context.cgContext.translateBy(x: 0, y: thumbnailSize.height)
+        // Flip vertically (Metal textures are upside down)
+        let size = CGSize(width: thumbWidth, height: thumbHeight)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            context.cgContext.translateBy(x: 0, y: size.height)
             context.cgContext.scaleBy(x: 1, y: -1)
-
-            // Draw the scaled image
-            context.cgContext.draw(cgImage, in: CGRect(origin: .zero, size: thumbnailSize))
+            context.cgContext.draw(cgImage, in: CGRect(origin: .zero, size: size))
         }
-
-        return thumbnail
     }
 }
 #else

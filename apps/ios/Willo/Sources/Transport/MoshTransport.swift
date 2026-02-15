@@ -1,5 +1,8 @@
 import Foundation
 import mosh
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "Mosh")
 
 /// Thread-safe state container for MoshTransport
 private actor MoshTransportState {
@@ -17,74 +20,8 @@ private actor MoshTransportState {
     }
 }
 
-/// Thread-safe container for data callbacks
-/// Uses direct callback instead of AsyncStream to avoid multiple consumer issues
-private final class DataCallbackState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var callback: ((Data) -> Void)?
-    private var pendingData: [Data] = []  // Buffer for data arriving before callback is set
-    private var isPrimaryCallbackSet = false  // Tracks if a direct callback was set (not from dataStream)
-
-    /// Set a primary callback (from setDataCallback). This takes priority over dataStream.
-    func setPrimaryCallback(_ cb: @escaping (Data) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = cb
-        isPrimaryCallbackSet = true
-        // Flush any pending data
-        for data in pendingData {
-            print("[Mosh] Flushing \(data.count) bytes of pending data")
-            cb(data)
-        }
-        pendingData.removeAll()
-    }
-
-    /// Set a secondary callback (from dataStream access). Only works if no primary callback is set.
-    func setSecondaryCallback(_ cb: @escaping (Data) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        // Don't overwrite a primary callback
-        if isPrimaryCallbackSet {
-            print("[Mosh] Ignoring secondary callback - primary callback already set")
-            return
-        }
-        callback = cb
-        // Flush any pending data
-        for data in pendingData {
-            print("[Mosh] Flushing \(data.count) bytes of pending data")
-            cb(data)
-        }
-        pendingData.removeAll()
-    }
-
-    func clearCallback() {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = nil
-        isPrimaryCallbackSet = false
-    }
-
-    func deliverData(_ data: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let cb = callback {
-            print("[DataCallback] Delivering \(data.count) bytes")
-            cb(data)
-        } else {
-            // Buffer data until callback is available
-            print("[Mosh] Buffering \(data.count) bytes (callback not ready)")
-            pendingData.append(data)
-        }
-    }
-
-    func finish() {
-        lock.lock()
-        defer { lock.unlock() }
-        callback = nil
-        isPrimaryCallbackSet = false
-        pendingData.removeAll()
-    }
-}
+/// Type alias using shared callback state implementation
+private typealias DataCallbackState = TransportDataCallbackState<Data>
 
 /// Mosh Transport using Blink's libmosh xcframework
 ///
@@ -125,6 +62,7 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     /// Window size pointer - explicitly allocated so mosh and Swift share the same memory
     /// Must remain valid for the lifetime of the mosh session
     private var windowSizePtr: UnsafeMutablePointer<winsize>?
+    private let windowSizeLock = NSLock()
 
     var state: TransportState {
         get async { await stateActor.state }
@@ -141,14 +79,10 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     /// NOTE: If setDataCallback was called first, this stream won't receive data
     var dataStream: AsyncStream<Data> {
         AsyncStream(bufferingPolicy: .unbounded) { [dataCallbackState] continuation in
-            print("[Mosh] Creating new data stream subscription")
-            // Set secondary callback - won't overwrite a primary callback from setDataCallback
             dataCallbackState.setSecondaryCallback { data in
                 continuation.yield(data)
             }
-            // Handle stream termination
             continuation.onTermination = { _ in
-                print("[Mosh] Data stream terminated, clearing callback")
                 dataCallbackState.clearCallback()
             }
         }
@@ -185,8 +119,16 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     deinit {
-        windowSizePtr?.deallocate()
+        deallocateWindowSize()
         closePipes()
+    }
+
+    /// Thread-safe deallocation of windowSizePtr — single deallocation site
+    private func deallocateWindowSize() {
+        windowSizeLock.lock()
+        defer { windowSizeLock.unlock() }
+        windowSizePtr?.deallocate()
+        windowSizePtr = nil
     }
 
     // MARK: - Connection
@@ -195,7 +137,7 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        print("[Mosh] Connecting to \(config.host):\(moshPort)")
+        logger.info("Connecting to \(self.config.host, privacy: .public):\(self.moshPort, privacy: .public)")
 
         // Create pipes for I/O
         var inputFds: [Int32] = [0, 0]
@@ -210,14 +152,14 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
         outputReadFd = outputFds[0] // we read from here
         outputWriteFd = outputFds[1] // mosh writes here
 
-        // Start reading output in background
+        // Start reading output in background — first data arrival marks us as connected
         startOutputReader()
 
         // Run mosh_main on a pthread (not GCD) - required for SIGWINCH to work
         isRunning = true
 
-        // Create thread using pthread_create like Blink does
-        // This is necessary because GCD threads don't receive signals properly
+        // Use passUnretained since the transport's lifecycle is managed externally.
+        // The isRunning flag ensures the thread exits if the transport is deallocated.
         var thread: pthread_t?
         let selfPtr = Unmanaged.passRetained(self).toOpaque()
 
@@ -234,58 +176,61 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
 
         moshThread = thread
 
-        // Detach the thread so it cleans up automatically
         if let thread = thread {
             pthread_detach(thread)
         }
 
-        // Wait a moment for connection to establish
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        // Wait for first data or timeout to determine connection status.
+        // The connected state is set by startOutputReader when first data arrives.
+        try await Task.sleep(nanoseconds: 3_000_000_000) // 3s for UDP handshake
 
         let currentState = await stateActor.state
-        if currentState != .error(.connectionFailed("")) {
+        if case .connecting = currentState {
+            // Still connecting after timeout — mark connected optimistically
+            // (mosh handles reconnection internally)
             await stateActor.setState(.connected)
         }
     }
 
     private func runMosh() {
-        // Thread ID is already stored by pthread_create in connect()
-        print("[Mosh] runMosh starting on thread \(pthread_self())")
-
         // Convert file descriptors to FILE*
         guard let f_in = fdopen(inputReadFd, "r"),
               let f_out = fdopen(outputWriteFd, "w") else {
-            print("[Mosh] Failed to fdopen file descriptors")
+            logger.error("Failed to fdopen file descriptors")
             Task { [weak self] in
                 await self?.stateActor.setState(.error(TransportError.connectionFailed("Failed to open file handles")))
             }
             return
         }
 
+        // Mark FDs as owned by FILE* now — fclose() will close them,
+        // so prevent closePipes() from double-closing
+        inputReadFd = -1
+        outputWriteFd = -1
+
         // Disable buffering on output so data flows immediately
         setvbuf(f_out, nil, _IONBF, 0)
 
         // Allocate window size struct - must be explicitly allocated so mosh
         // and Swift share the same memory when we update it for SIGWINCH
-        windowSizePtr = UnsafeMutablePointer<winsize>.allocate(capacity: 1)
-        windowSizePtr!.pointee = winsize(
+        let wsPtr = UnsafeMutablePointer<winsize>.allocate(capacity: 1)
+        wsPtr.pointee = winsize(
             ws_row: terminalRows,
             ws_col: terminalCols,
             ws_xpixel: 0,
             ws_ypixel: 0
         )
+        windowSizeLock.lock()
+        windowSizePtr = wsPtr
+        windowSizeLock.unlock()
 
-        print("[Mosh] Calling mosh_main with:")
-        print("[Mosh]   host: \(config.host)")
-        print("[Mosh]   port: \(moshPort)")
-        print("[Mosh]   key length: \(moshKey.count)")
-        print("[Mosh]   window: \(terminalCols)x\(terminalRows)")
+        logger.info("Starting mosh session to \(self.config.host, privacy: .public)")
 
         // Call mosh_main (blocks until session ends)
         let result = mosh_main(
             f_in,
             f_out,
-            windowSizePtr!,
+            wsPtr,
             nil,    // state_callback (for session persistence)
             nil,    // state_callback_context
             config.host,
@@ -297,16 +242,14 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
             nil          // predict_overwrite
         )
 
-        print("[Mosh] mosh_main exited with code: \(result)")
+        logger.info("mosh_main exited with code: \(result)")
 
         fclose(f_in)
         fclose(f_out)
 
-        // Clean up allocated memory
-        windowSizePtr?.deallocate()
-        windowSizePtr = nil
+        // Clean up allocated memory via centralized method
+        deallocateWindowSize()
 
-        // Clear the thread reference
         moshThread = nil
 
         Task { [weak self] in
@@ -318,14 +261,9 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
 
     func disconnect() async throws {
         isRunning = false
-
-        // Clear the thread reference
         moshThread = nil
 
-        // Clean up allocated memory
-        windowSizePtr?.deallocate()
-        windowSizePtr = nil
-
+        deallocateWindowSize()
         closePipes()
         await stateActor.setState(.disconnected)
         dataCallbackState.finish()
@@ -356,29 +294,22 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
     }
 
     func resize(cols: UInt16, rows: UInt16) async throws {
-        print("[Mosh] resize() called with \(cols)x\(rows), current: \(terminalCols)x\(terminalRows)")
-
         terminalCols = cols
         terminalRows = rows
 
         // Update the window size struct that mosh reads on SIGWINCH
-        // Using the pointer ensures mosh sees the same memory we're updating
-        if let ptr = windowSizePtr {
+        windowSizeLock.lock()
+        let ptr = windowSizePtr
+        windowSizeLock.unlock()
+
+        if let ptr = ptr {
             ptr.pointee.ws_col = cols
             ptr.pointee.ws_row = rows
-            print("[Mosh] Updated windowSizePtr to \(ptr.pointee.ws_col)x\(ptr.pointee.ws_row)")
-        } else {
-            print("[Mosh] WARNING: windowSizePtr is nil!")
         }
 
         // Send SIGWINCH to the mosh thread to trigger resize handling
-        // moshThread is from pthread_create (not GCD), so pthread_kill should work
         if let thread = moshThread {
-            print("[Mosh] Sending SIGWINCH for resize to \(cols)x\(rows), thread=\(thread)")
-            let result = pthread_kill(thread, SIGWINCH)
-            print("[Mosh] pthread_kill result: \(result) (0 = success)")
-        } else {
-            print("[Mosh] Cannot send SIGWINCH - mosh thread not running")
+            pthread_kill(thread, SIGWINCH)
         }
     }
 
@@ -389,27 +320,30 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
             guard let self = self else { return }
 
             var buffer = [UInt8](repeating: 0, count: 4096)
-            print("[Mosh] Output reader started, fd=\(self.outputReadFd)")
+            var receivedFirstData = false
 
             while self.isRunning && self.outputReadFd >= 0 {
                 let bytesRead = read(self.outputReadFd, &buffer, buffer.count)
 
                 if bytesRead > 0 {
                     let data = Data(bytes: buffer, count: bytesRead)
-                    print("[Mosh] Received \(bytesRead) bytes from mosh")
+
+                    // Transition to connected on first data received from mosh
+                    if !receivedFirstData {
+                        receivedFirstData = true
+                        Task {
+                            await self.stateActor.setState(.connected)
+                        }
+                    }
+
                     self.dataCallbackState.deliverData(data)
                 } else if bytesRead == 0 {
-                    // EOF - pipe closed
-                    print("[Mosh] Output reader: EOF")
                     break
                 } else if errno != EINTR {
-                    // Error (not just interrupted)
-                    print("[Mosh] Output reader error: \(String(cString: strerror(errno)))")
+                    logger.error("Output reader error: \(String(cString: strerror(errno)), privacy: .public)")
                     break
                 }
             }
-
-            print("[Mosh] Output reader stopped")
         }
     }
 }

@@ -1,10 +1,13 @@
 import CoreText
 import MetalKit
+import os.log
 #if os(iOS)
 import UIKit
 #else
 import AppKit
 #endif
+
+private let logger = Logger(subsystem: "com.willo.app", category: "GlyphAtlas")
 
 /// Glyph atlas for terminal text rendering
 ///
@@ -51,8 +54,8 @@ final class GlyphAtlas {
     private let atlasWidth: Int = 1024
     private let atlasHeight: Int = 1024
 
-    /// Padding around each glyph (critical for preventing texture bleeding)
-    private let glyphPadding: Int = 1
+    /// Padding around each glyph (prevents texture bleeding with nearest sampling)
+    private let glyphPadding: Int = 2
 
     /// Font settings
     private let fontSize: CGFloat
@@ -105,28 +108,26 @@ final class GlyphAtlas {
         // Try Bundle.module first (SPM resources), then Bundle.main
         let bundles = [Bundle.module, Bundle.main]
 
-        print("[GlyphAtlas] Searching for fonts in bundles:")
-        print("[GlyphAtlas]   Bundle.module: \(Bundle.module.bundlePath)")
-        print("[GlyphAtlas]   Bundle.main: \(Bundle.main.bundlePath)")
+        logger.debug("Searching for fonts in bundles: module=\(Bundle.module.bundlePath, privacy: .public), main=\(Bundle.main.bundlePath, privacy: .public)")
 
         for fontName in fontNames {
             var registered = false
             for bundle in bundles {
                 // Try direct path first
                 if let fontURL = bundle.url(forResource: fontName, withExtension: "ttf") {
-                    print("[GlyphAtlas] Found \(fontName) at: \(fontURL.path)")
+                    logger.debug("Found \(fontName, privacy: .public) at: \(fontURL.path, privacy: .public)")
                     registered = registerFont(at: fontURL, name: fontName)
                     if registered { break }
                 }
                 // Try Fonts subdirectory
                 if let fontURL = bundle.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts") {
-                    print("[GlyphAtlas] Found \(fontName) in Fonts/ at: \(fontURL.path)")
+                    logger.debug("Found \(fontName, privacy: .public) in Fonts/ at: \(fontURL.path, privacy: .public)")
                     registered = registerFont(at: fontURL, name: fontName)
                     if registered { break }
                 }
             }
             if !registered {
-                print("[GlyphAtlas] ❌ Font not found: \(fontName)")
+                logger.error("Font not found: \(fontName, privacy: .public)")
             }
         }
     }
@@ -142,9 +143,9 @@ final class GlyphAtlas {
                let descriptor = descriptors.first,
                let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
                 fontPostScriptNames[name] = psName
-                print("[GlyphAtlas] Registered font: \(name) → PostScript name: '\(psName)'")
+                logger.info("Registered font: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
             } else {
-                print("[GlyphAtlas] Registered font: \(name) (couldn't get PostScript name)")
+                logger.info("Registered font: \(name, privacy: .public) (couldn't get PostScript name)")
             }
             return true
         } else if let cfError = error?.takeRetainedValue() {
@@ -156,13 +157,13 @@ final class GlyphAtlas {
                    let descriptor = descriptors.first,
                    let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
                     fontPostScriptNames[name] = psName
-                    print("[GlyphAtlas] Font already registered: \(name) → PostScript name: '\(psName)'")
+                    logger.debug("Font already registered: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
                 } else {
-                    print("[GlyphAtlas] Font already registered: \(name)")
+                    logger.debug("Font already registered: \(name, privacy: .public)")
                 }
                 return true
             }
-            print("[GlyphAtlas] Failed to register font \(name): \(cfError)")
+            logger.error("Failed to register font \(name, privacy: .public): \(String(describing: cfError), privacy: .public)")
         }
         return false
     }
@@ -179,16 +180,16 @@ final class GlyphAtlas {
         // Add original names as fallback
         fontNamesToTry.append(contentsOf: ["JetBrainsMonoNerdFont-Regular", "JetBrainsMono-Regular", "Menlo-Regular"])
 
-        print("[GlyphAtlas] Looking for fonts: \(fontNamesToTry)")
+        logger.debug("Looking for fonts: \(fontNamesToTry, privacy: .public)")
 
         for fontName in fontNamesToTry {
             let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
             // Check if we got the font we asked for (not a fallback)
             if let actualName = CTFontCopyPostScriptName(font) as String? {
-                print("[GlyphAtlas] Requested '\(fontName)', got '\(actualName)'")
+                logger.debug("Requested '\(fontName, privacy: .public)', got '\(actualName, privacy: .public)'")
                 if actualName == fontName {
                     regularFont = font
-                    print("[GlyphAtlas] ✅ Using font: \(actualName)")
+                    logger.info("Using font: \(actualName, privacy: .public)")
 
                     // Test if font has box drawing characters
                     let testCodepoint: UInt32 = 0x2502 // │ BOX DRAWINGS LIGHT VERTICAL
@@ -198,7 +199,7 @@ final class GlyphAtlas {
                     let str = String(Character(scalar))
                     (str as NSString).getCharacters(&codepoints)
                     let hasBoxDrawing = CTFontGetGlyphsForCharacters(font, codepoints, &glyph, 1)
-                    print("[GlyphAtlas] Font has box drawing (U+2502): \(hasBoxDrawing), glyph: \(glyph)")
+                    logger.debug("Font has box drawing (U+2502): \(hasBoxDrawing), glyph: \(glyph)")
 
                     break
                 }
@@ -208,7 +209,7 @@ final class GlyphAtlas {
         // Fallback to system monospace
         if regularFont == nil {
             regularFont = CTFontCreateWithName("Menlo-Regular" as CFString, fontSize, nil)
-            print("[GlyphAtlas] ⚠️ Fallback to Menlo")
+            logger.warning("Falling back to Menlo font")
         }
 
         guard let regular = regularFont else { return }
@@ -246,15 +247,15 @@ final class GlyphAtlas {
         } else {
             // Fallback: estimate based on font size (monospace fonts are ~0.6x font size)
             cellWidth = ceil(fontSize * 0.6)
-            print("[GlyphAtlas] WARNING: Could not get glyph for 'M', using estimate")
+            logger.warning("Could not get glyph for 'M', using estimate")
         }
 
         // Ensure minimum cell size
         if cellWidth < 1 { cellWidth = ceil(fontSize * 0.6) }
         if cellHeight < 1 { cellHeight = ceil(fontSize * 1.2) }
 
-        print("[GlyphAtlas] Font metrics for \(fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
-        print("[GlyphAtlas] Cell metrics: width=\(cellWidth), height=\(cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
+        logger.info("Font metrics for \(fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
+        logger.info("Cell metrics: width=\(cellWidth), height=\(cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
     }
 
     private func createTexture() {
@@ -313,7 +314,7 @@ final class GlyphAtlas {
     /// Reset the atlas when it's full
     /// Clears all cached glyphs and re-populates ASCII characters
     private func resetAtlas() {
-        print("GlyphAtlas: Resetting atlas - clearing \(glyphCache.count) cached glyphs")
+        logger.info("Resetting atlas - clearing \(self.glyphCache.count) cached glyphs")
 
         // Clear the glyph cache
         glyphCache.removeAll()
@@ -336,7 +337,7 @@ final class GlyphAtlas {
 
         // Re-populate ASCII characters
         prepopulateASCII()
-        print("GlyphAtlas: Reset complete, \(glyphCache.count) glyphs re-populated")
+        logger.info("Reset complete, \(self.glyphCache.count) glyphs re-populated")
     }
 
     // MARK: - Glyph Rendering
@@ -384,7 +385,7 @@ final class GlyphAtlas {
         // Check if atlas is full
         if packY + glyphHeight > atlasHeight {
             // Atlas full - reset and re-populate essentials
-            print("GlyphAtlas: Atlas full, resetting...")
+            logger.warning("Atlas full, resetting...")
             resetAtlas()
             // Try again after reset - use same position calculation
             if packX + glyphWidth > atlasWidth {
