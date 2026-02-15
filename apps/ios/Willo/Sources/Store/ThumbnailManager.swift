@@ -111,7 +111,9 @@ final class ThumbnailManager: ObservableObject {
             withTimeInterval: captureInterval,
             repeats: true
         ) { [weak self] _ in
-            self?.captureAllSnapshots()
+            Task { @MainActor in
+                self?.captureAllSnapshots()
+            }
         }
     }
 

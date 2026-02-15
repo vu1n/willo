@@ -262,7 +262,12 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
                         }
                     } else {
                         // Legacy format (less common now)
-                        let sequence = "\u{1B}[M\(Character(UnicodeScalar(32 + button)!))\(Character(UnicodeScalar(32 + col)!))\(Character(UnicodeScalar(32 + row)!))"
+                        guard let btnScalar = UnicodeScalar(32 + button),
+                              let colScalar = UnicodeScalar(32 + col),
+                              let rowScalar = UnicodeScalar(32 + row) else {
+                            break
+                        }
+                        let sequence = "\u{1B}[M\(Character(btnScalar))\(Character(colScalar))\(Character(rowScalar))"
                         if let data = sequence.data(using: .utf8) {
                             onInput?(data)
                         }
@@ -934,10 +939,13 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
 
-        // Send mouse press event to terminal
-        if let touch = touches.first {
-            let location = touch.location(in: self)
-            sendMouseEvent(location: location, isPress: true)
+        // Only send mouse events if the terminal has mouse tracking enabled
+        let modes = terminal.getModes()
+        if modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
+            if let touch = touches.first {
+                let location = touch.location(in: self)
+                sendMouseEvent(location: location, isPress: true)
+            }
         }
 
         // Become first responder to show keyboard
@@ -949,20 +957,26 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
 
-        // Send mouse release event to terminal
-        if let touch = touches.first {
-            let location = touch.location(in: self)
-            sendMouseEvent(location: location, isPress: false)
+        // Only send mouse events if the terminal has mouse tracking enabled
+        let modes = terminal.getModes()
+        if modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
+            if let touch = touches.first {
+                let location = touch.location(in: self)
+                sendMouseEvent(location: location, isPress: false)
+            }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
 
-        // Send mouse drag event to terminal (button 0 + 32 for drag)
-        if let touch = touches.first {
-            let location = touch.location(in: self)
-            sendMouseEvent(location: location, isPress: true, isDrag: true)
+        // Only send mouse drag events if the terminal has mouse tracking enabled
+        let modes = terminal.getModes()
+        if modes.mouseEventButton || modes.mouseEventAny {
+            if let touch = touches.first {
+                let location = touch.location(in: self)
+                sendMouseEvent(location: location, isPress: true, isDrag: true)
+            }
         }
     }
 
@@ -990,7 +1004,19 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     // MARK: - Hardware Keyboard Support
 
+    /// Cached key commands array — rebuilt lazily
+    private var _cachedKeyCommands: [UIKeyCommand]?
+
     override var keyCommands: [UIKeyCommand]? {
+        if let cached = _cachedKeyCommands {
+            return cached
+        }
+        let commands = buildKeyCommands()
+        _cachedKeyCommands = commands
+        return commands
+    }
+
+    private func buildKeyCommands() -> [UIKeyCommand] {
         var commands: [UIKeyCommand] = []
 
         // Arrow keys
@@ -1105,7 +1131,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     @objc private func handleControlKey(_ command: UIKeyCommand) {
         guard let input = command.input, let char = input.first else { return }
         // Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A
-        let controlCode = UInt8(char.asciiValue! - 0x60)
+        guard let asciiValue = char.asciiValue else { return }
+        let controlCode = UInt8(asciiValue - 0x60)
         onInput?(Data([controlCode]))
     }
 

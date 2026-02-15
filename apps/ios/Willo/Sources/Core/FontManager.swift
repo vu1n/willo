@@ -31,6 +31,7 @@ final class FontManager {
     )
 
     private var registeredFonts: Set<String> = []
+    private let lock = NSLock()
     private let queue = DispatchQueue(label: "com.willo.fontmanager")
 
     private init() {}
@@ -41,6 +42,13 @@ final class FontManager {
         queue.async { [weak self] in
             self?.registerFontsInBundle()
         }
+    }
+
+    /// Check if a font is registered in our set
+    func containsFont(_ fontName: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return registeredFonts.contains(fontName)
     }
 
     /// Check if a font is available
@@ -86,7 +94,10 @@ final class FontManager {
                 registerFont(at: fontURL)
             }
 
-            print("[FontManager] Registered \(registeredFonts.count) fonts")
+            lock.lock()
+            let count = registeredFonts.count
+            lock.unlock()
+            print("[FontManager] Registered \(count) fonts")
         } catch {
             print("[FontManager] Error reading fonts directory: \(error)")
         }
@@ -103,7 +114,9 @@ final class FontManager {
         var error: Unmanaged<CFError>?
         if CTFontManagerRegisterGraphicsFont(font, &error) {
             if let fontName = font.postScriptName as String? {
+                lock.lock()
                 registeredFonts.insert(fontName)
+                lock.unlock()
                 print("[FontManager] Registered font: \(fontName)")
             }
         } else if let error = error?.takeRetainedValue() {

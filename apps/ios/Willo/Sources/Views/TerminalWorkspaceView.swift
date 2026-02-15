@@ -292,7 +292,9 @@ struct TerminalWorkspaceView: View {
             if let layout = layoutToUse, profile.multiplexer == .zellij {
                 // Use layout with session name (versioned filename for cache invalidation)
                 let layoutPath = "/tmp/willo-layout-\(layout.id)-v\(layout.contentHash).kdl"
-                command = "zellij --new-session-with-layout \(layoutPath) -s \"\(sessionName)\" 2>/dev/null || zellij attach -c \"\(sessionName)\""
+                let escapedPath = ShellEscape.escape(layoutPath)
+                let escapedName = ShellEscape.escape(sessionName)
+                command = "zellij --new-session-with-layout \(escapedPath) -s \(escapedName) 2>/dev/null || zellij attach -c \(escapedName)"
             } else {
                 // Standard namedSession behavior
                 command = StartupBehavior.namedSession.command(
@@ -324,10 +326,13 @@ struct TerminalWorkspaceView: View {
 
         // Only write if file doesn't exist (conditional write)
         // This avoids rewriting on every connect while ensuring updates are applied
+        let escapedLayoutPath = ShellEscape.escape(layoutPath)
+        // Use a unique heredoc delimiter that cannot appear in user content
+        let delimiter = "WILLO_LAYOUT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         let writeCommand = """
-        [ -f \(layoutPath) ] || cat > \(layoutPath) << 'WILLO_LAYOUT_EOF'
+        [ -f \(escapedLayoutPath) ] || cat > \(escapedLayoutPath) << '\(delimiter)'
         \(layout.kdlContent)
-        WILLO_LAYOUT_EOF
+        \(delimiter)
 
         """
 
@@ -642,7 +647,12 @@ struct TerminalStatusBar: View {
                         onDisconnect()
                     }
                     .help("Disconnect")
-                } else if sessionState == .disconnected || sessionState == .error(NSError()) {
+                } else if case .disconnected = sessionState {
+                    IndustrialIconButton(icon: "bolt.fill", isActive: true, activeColor: .terminalGreen) {
+                        onReconnect()
+                    }
+                    .help("Connect")
+                } else if case .error = sessionState {
                     IndustrialIconButton(icon: "bolt.fill", isActive: true, activeColor: .terminalGreen) {
                         onReconnect()
                     }

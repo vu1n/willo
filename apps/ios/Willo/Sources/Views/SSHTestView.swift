@@ -147,24 +147,8 @@ struct SSHTestView: View {
 
         self.transport = newTransport
 
-        // Start data reading task first
         Task {
-            for await data in newTransport.dataStream {
-                if let text = String(data: data, encoding: .utf8) {
-                    await MainActor.run {
-                        outputText += text
-                    }
-                }
-            }
-
-            await MainActor.run {
-                connectionStatus = "Disconnected"
-                transport = nil
-            }
-        }
-
-        // Then connect
-        Task {
+            // Connect first
             do {
                 try await newTransport.connect()
 
@@ -178,6 +162,21 @@ struct SSHTestView: View {
                     isConnecting = false
                     transport = nil
                 }
+                return
+            }
+
+            // Then consume data stream (only after successful connection)
+            for await data in newTransport.dataStream {
+                if let text = String(data: data, encoding: .utf8) {
+                    await MainActor.run {
+                        outputText += text
+                    }
+                }
+            }
+
+            await MainActor.run {
+                connectionStatus = "Disconnected"
+                transport = nil
             }
         }
     }

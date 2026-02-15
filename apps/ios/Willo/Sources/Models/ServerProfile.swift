@@ -180,8 +180,8 @@ enum StartupBehavior: String, Codable, CaseIterable {
             switch multiplexer {
             // Create or attach to session with specific name
             // -c flag creates if doesn't exist, attaches if it does
-            case .zellij: return "zellij attach -c \"\(name)\""
-            case .tmux: return "tmux new-session -A -s \"\(name)\""
+            case .zellij: return "zellij attach -c \(ShellEscape.escape(name))"
+            case .tmux: return "tmux new-session -A -s \(ShellEscape.escape(name))"
             case .none: return nil
             }
         }

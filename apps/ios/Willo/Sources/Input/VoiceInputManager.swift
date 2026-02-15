@@ -66,10 +66,15 @@ final class VoiceInputManager: ObservableObject {
         }
 
         // Request microphone permission
-        let audioSession = AVAudioSession.sharedInstance()
-        let micPermission = await withCheckedContinuation { continuation in
-            audioSession.requestRecordPermission { granted in
-                continuation.resume(returning: granted)
+        let micPermission: Bool
+        if #available(iOS 17.0, *) {
+            micPermission = await AVAudioApplication.requestRecordPermission()
+        } else {
+            let audioSession = AVAudioSession.sharedInstance()
+            micPermission = await withCheckedContinuation { continuation in
+                audioSession.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
             }
         }
 

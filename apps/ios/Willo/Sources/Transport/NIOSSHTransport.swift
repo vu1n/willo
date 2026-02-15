@@ -94,7 +94,8 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     }
 
     deinit {
-        try? group.syncShutdownGracefully()
+        // Use async shutdown to avoid deadlock if deinit runs on an NIO event loop thread
+        group.shutdownGracefully { _ in }
     }
 
     // MARK: - Connection
@@ -751,7 +752,11 @@ extension NIOSSHTransport {
         }.get()
 
         // We'll create the handle after we have the child channel
-        var bridgeHandle: BridgeChannelHandle!
+        // Use a class wrapper to safely capture the handle from the closure
+        final class HandleBox: @unchecked Sendable {
+            var handle: BridgeChannelHandle?
+        }
+        let handleBox = HandleBox()
 
         // Create child channel on the event loop
         let childChannel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Channel, Error>) in
@@ -772,13 +777,17 @@ extension NIOSSHTransport {
                         onData: onData,
                         onClose: onClose
                     )
-                    bridgeHandle = handle
+                    handleBox.handle = handle
 
                     return childChannel.pipeline.addHandlers([
                         BridgeDataHandler(handle: handle)
                     ])
                 }
             }
+        }
+
+        guard let bridgeHandle = handleBox.handle else {
+            throw TransportError.connectionFailed("Bridge channel handle was not created")
         }
 
         // Execute the command

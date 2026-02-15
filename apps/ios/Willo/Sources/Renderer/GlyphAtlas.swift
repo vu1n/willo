@@ -133,7 +133,9 @@ final class GlyphAtlas {
     }
 
     /// Maps font file names to their actual PostScript names (discovered at registration)
+    /// Protected by fontPostScriptNamesLock for thread safety
     private static var fontPostScriptNames: [String: String] = [:]
+    private static let fontPostScriptNamesLock = NSLock()
 
     private static func registerFont(at url: URL, name: String) -> Bool {
         var error: Unmanaged<CFError>?
@@ -142,7 +144,9 @@ final class GlyphAtlas {
             if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
                let descriptor = descriptors.first,
                let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
+                fontPostScriptNamesLock.lock()
                 fontPostScriptNames[name] = psName
+                fontPostScriptNamesLock.unlock()
                 logger.info("Registered font: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
             } else {
                 logger.info("Registered font: \(name, privacy: .public) (couldn't get PostScript name)")
@@ -156,7 +160,9 @@ final class GlyphAtlas {
                 if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
                    let descriptor = descriptors.first,
                    let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
+                    fontPostScriptNamesLock.lock()
                     fontPostScriptNames[name] = psName
+                    fontPostScriptNamesLock.unlock()
                     logger.debug("Font already registered: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
                 } else {
                     logger.debug("Font already registered: \(name, privacy: .public)")
@@ -174,7 +180,10 @@ final class GlyphAtlas {
         var fontNamesToTry: [String] = []
 
         // Add discovered PostScript name for Nerd Font if we have it
-        if let nerdFontPS = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"] {
+        Self.fontPostScriptNamesLock.lock()
+        let nerdFontPSCopy = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"]
+        Self.fontPostScriptNamesLock.unlock()
+        if let nerdFontPS = nerdFontPSCopy {
             fontNamesToTry.append(nerdFontPS)
         }
         // Add original names as fallback
