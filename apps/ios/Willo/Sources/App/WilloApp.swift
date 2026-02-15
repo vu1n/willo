@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.willo.app", category: "AppState")
 
 /// Shared app services container - singleton to avoid StateObject recreation issues
 @MainActor
@@ -96,11 +99,11 @@ public final class AppState: ObservableObject {
 
     private func mergeCloudProfiles() {
         guard let cloudProfiles = cloudSync.loadServerProfiles() else {
-            print("[AppState] No cloud profiles to merge")
+            logger.debug("No cloud profiles to merge")
             return
         }
 
-        print("[AppState] Merging \(cloudProfiles.count) profiles from iCloud")
+        logger.info("Merging \(cloudProfiles.count) profiles from iCloud")
 
         // For each cloud profile, check if we have it locally
         for cloudProfile in cloudProfiles {
@@ -111,13 +114,13 @@ public final class AppState: ObservableObject {
                 let localLastConnected = localProfile.lastConnected ?? Date.distantPast
 
                 if cloudLastConnected > localLastConnected {
-                    print("[AppState] Updating profile \(cloudProfile.displayName) from iCloud")
+                    logger.debug("Updating profile \(cloudProfile.displayName, privacy: .public) from iCloud")
                     // Preserve local auth method (passwords stay local)
                     serverProfiles[localIndex] = cloudProfile.toServerProfile(preservingAuthFrom: localProfile)
                 }
             } else {
                 // New profile from cloud
-                print("[AppState] Adding new profile from iCloud: \(cloudProfile.displayName)")
+                logger.info("Adding new profile from iCloud: \(cloudProfile.displayName, privacy: .public)")
                 serverProfiles.append(cloudProfile.toServerProfile(preservingAuthFrom: nil))
             }
         }
@@ -146,7 +149,7 @@ public final class AppState: ObservableObject {
 
         // Try iCloud first (primary source) - this survives app reinstalls
         if let cloudProfiles = cloudSync.loadServerProfilesWithSync(), !cloudProfiles.isEmpty {
-            print("[AppState] Loaded \(cloudProfiles.count) profiles from iCloud")
+            logger.info("Loaded \(cloudProfiles.count) profiles from iCloud")
             serverProfiles = cloudProfiles.map { $0.toServerProfile(preservingAuthFrom: nil) }
 
             // Also restore any local auth data from UserDefaults cache
@@ -177,14 +180,14 @@ public final class AppState: ObservableObject {
 
         // Fall back to UserDefaults (local cache / offline mode)
         guard let data = UserDefaults.standard.data(forKey: Self.serverProfilesKey) else {
-            print("[AppState] No profiles in iCloud or UserDefaults")
+            logger.debug("No profiles in iCloud or UserDefaults")
             return
         }
         do {
             serverProfiles = try JSONDecoder().decode([ServerProfile].self, from: data)
-            print("[AppState] Loaded \(serverProfiles.count) profiles from UserDefaults (iCloud unavailable)")
+            logger.info("Loaded \(self.serverProfiles.count) profiles from UserDefaults (iCloud unavailable)")
         } catch {
-            print("[AppState] Failed to load server profiles: \(error)")
+            logger.error("Failed to load server profiles: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -203,7 +206,7 @@ public final class AppState: ObservableObject {
             let data = try JSONEncoder().encode(serverProfiles)
             UserDefaults.standard.set(data, forKey: Self.serverProfilesKey)
         } catch {
-            print("[AppState] Failed to save server profiles: \(error)")
+            logger.error("Failed to save server profiles: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
