@@ -10,6 +10,7 @@
 		3DF7F1A92EF44F9500D4C28F /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 3DF7F1A82EF44F9500D4C28F /* libz.tbd */; };
 		A1000001 /* WilloPkg in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002 /* WilloPkg */; };
 		A1000003 /* WilloApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1100003 /* WilloApp.swift */; };
+		A1000010 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1100010 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +18,7 @@
 		A1100001 /* Willo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Willo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1100002 /* Willo */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Willo; sourceTree = "<group>"; };
 		A1100003 /* WilloApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WilloApp.swift; sourceTree = "<group>"; };
+		A1100010 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -62,6 +64,7 @@
 			isa = PBXGroup;
 			children = (
 				A1100003 /* WilloApp.swift */,
+				A1100010 /* Assets.xcassets */,
 			);
 			path = AppSources;
 			sourceTree = "<group>";
@@ -69,12 +72,21 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A1200003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000010 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1400001 /* Willo */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1500003 /* Build configuration list for PBXNativeTarget "Willo" */;
 			buildPhases = (
 				A1200002 /* Sources */,
 				A1200001 /* Frameworks */,
+				A1200003 /* Resources */,
 			);
 			buildRules = (
 			);
