@@ -377,9 +377,8 @@ struct TerminalWorkspaceView: View {
         GlyphAtlas.ensureFontsRegistered()
 
         // Use the SAME calculation as GlyphAtlas.setupFonts() for consistency
-        // Create a temporary font to get accurate metrics
-        // NOTE: Must use PostScript name, not filename! The font's PS name is "JetBrainsMonoNF-Regular"
-        let fontName = "JetBrainsMonoNF-Regular"
+        // Read the configured font, falling back to Iosevka then JetBrains Mono
+        let fontName = UserDefaults.standard.string(forKey: "terminalFontName") ?? "IosevkaNerdFontMono-Regular"
         let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
 
         let ascent = CTFontGetAscent(font)

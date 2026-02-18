@@ -141,8 +141,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Create command queue
         commandQueue = device.makeCommandQueue()
 
-        // Create glyph atlas - 24pt is good for iPad retina displays
-        glyphAtlas = GlyphAtlas(device: device, fontSize: 24.0)
+        // Create glyph atlas at retina resolution with configured font
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : 2.0
+        let fontPref = UserDefaults.standard.string(forKey: "terminalFontName")
+        glyphAtlas = GlyphAtlas(device: device, fontSize: 24.0, screenScale: scale, preferredFont: fontPref)
 
         // Use atlas cell metrics for proper sizing
         if let atlas = glyphAtlas {
@@ -523,8 +525,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         let clampedSize = max(14.0, min(32.0, newSize))
 
-        // Rebuild glyph atlas with new size
-        glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
+        // Rebuild glyph atlas with new size at retina resolution
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : 2.0
+        let fontPref = UserDefaults.standard.string(forKey: "terminalFontName")
+        glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize, screenScale: scale, preferredFont: fontPref)
 
         // Update cell metrics
         if let atlas = glyphAtlas {
