@@ -20,8 +20,9 @@ jobs:
         with:
           lfs: true
 
-      - name: Show Xcode version
+      - name: Select Xcode 26.2
         run: |
+          sudo xcode-select -s /Applications/Xcode_26.2.app
           xcodebuild -version
           xcodebuild -showsdks | grep iphoneos
 
