@@ -940,8 +940,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         super.touchesBegan(touches, with: event)
 
         // Only send mouse events if the terminal has mouse tracking enabled
-        let modes = terminal.getModes()
-        if modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
+        if let modes = terminal?.getModes(),
+           modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
             if let touch = touches.first {
                 let location = touch.location(in: self)
                 sendMouseEvent(location: location, isPress: true)
@@ -958,8 +958,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         super.touchesEnded(touches, with: event)
 
         // Only send mouse events if the terminal has mouse tracking enabled
-        let modes = terminal.getModes()
-        if modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
+        if let modes = terminal?.getModes(),
+           modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
             if let touch = touches.first {
                 let location = touch.location(in: self)
                 sendMouseEvent(location: location, isPress: false)
@@ -971,8 +971,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         super.touchesMoved(touches, with: event)
 
         // Only send mouse drag events if the terminal has mouse tracking enabled
-        let modes = terminal.getModes()
-        if modes.mouseEventButton || modes.mouseEventAny {
+        if let modes = terminal?.getModes(),
+           modes.mouseEventButton || modes.mouseEventAny {
             if let touch = touches.first {
                 let location = touch.location(in: self)
                 sendMouseEvent(location: location, isPress: true, isDrag: true)

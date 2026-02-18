@@ -263,8 +263,8 @@ final class GlyphAtlas {
         if cellWidth < 1 { cellWidth = ceil(fontSize * 0.6) }
         if cellHeight < 1 { cellHeight = ceil(fontSize * 1.2) }
 
-        logger.info("Font metrics for \(fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
-        logger.info("Cell metrics: width=\(cellWidth), height=\(cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
+        logger.info("Font metrics for \(self.fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
+        logger.info("Cell metrics: width=\(self.cellWidth), height=\(self.cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
     }
 
     private func createTexture() {

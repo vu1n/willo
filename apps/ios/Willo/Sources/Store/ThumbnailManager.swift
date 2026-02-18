@@ -52,7 +52,7 @@ final class ThumbnailManager: ObservableObject {
         startCaptureTimer()
     }
 
-    nonisolated deinit {
+    deinit {
         // Timer cleanup handled by ARC - timer holds weak self
     }
 
