@@ -378,7 +378,7 @@ struct TerminalWorkspaceView: View {
 
         // Use the SAME calculation as GlyphAtlas.setupFonts() for consistency
         // Read the configured font, falling back to Iosevka then JetBrains Mono
-        let fontName = UserDefaults.standard.string(forKey: "terminalFontName") ?? "IosevkaNerdFontMono-Regular"
+        let fontName = UserDefaults.standard.string(forKey: "terminalFontName") ?? "IosevkaTermNF"
         let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
 
         let ascent = CTFontGetAscent(font)

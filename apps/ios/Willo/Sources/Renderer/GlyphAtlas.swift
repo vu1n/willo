@@ -115,7 +115,11 @@ final class GlyphAtlas {
             "JetBrainsMonoNerdFont-Regular",
             "JetBrainsMonoNerdFont-Bold",
             "JetBrainsMonoNerdFont-Italic",
-            "JetBrainsMonoNerdFont-BoldItalic"
+            "JetBrainsMonoNerdFont-BoldItalic",
+            "IosevkaTermNerdFont-Regular",
+            "IosevkaTermNerdFont-Bold",
+            "IosevkaTermNerdFont-Italic",
+            "IosevkaTermNerdFont-BoldItalic"
         ]
 
         // Try Bundle.module first (SPM resources), then Bundle.main

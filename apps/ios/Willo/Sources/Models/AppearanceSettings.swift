@@ -35,14 +35,14 @@ final class AppearanceSettings: ObservableObject {
     }
 
     enum FontFamily: String, CaseIterable {
-        case iosevka = "Iosevka"
+        case iosevkaTerm = "IosevkaTerm"
         case jetBrainsMono = "JetBrainsMono"
         case sfMono = "SFMono"
         case menlo = "Menlo"
 
         var displayName: String {
             switch self {
-            case .iosevka: return "Iosevka"
+            case .iosevkaTerm: return "Iosevka Term"
             case .jetBrainsMono: return "JetBrains Mono"
             case .sfMono: return "SF Mono"
             case .menlo: return "Menlo"
@@ -52,7 +52,7 @@ final class AppearanceSettings: ObservableObject {
         /// PostScript name for the regular weight
         var fontName: String {
             switch self {
-            case .iosevka: return "IosevkaNerdFontMono-Regular"
+            case .iosevkaTerm: return "IosevkaTermNF"
             case .jetBrainsMono: return "JetBrainsMonoNerdFont-Regular"
             case .sfMono: return "SFMono-Regular"
             case .menlo: return "Menlo-Regular"
@@ -61,7 +61,7 @@ final class AppearanceSettings: ObservableObject {
 
         var boldFontName: String {
             switch self {
-            case .iosevka: return "IosevkaNerdFontMono-Bold"
+            case .iosevkaTerm: return "IosevkaTermNF-Bold"
             case .jetBrainsMono: return "JetBrainsMonoNerdFont-Bold"
             case .sfMono: return "SFMono-Bold"
             case .menlo: return "Menlo-Bold"
@@ -70,7 +70,7 @@ final class AppearanceSettings: ObservableObject {
 
         var description: String {
             switch self {
-            case .iosevka: return "Nerd Font Mono, clean & narrow"
+            case .iosevkaTerm: return "Nerd Font, clean & narrow"
             case .jetBrainsMono: return "Nerd Font with icons"
             case .sfMono: return "Apple's monospace font"
             case .menlo: return "Classic terminal font"
@@ -115,12 +115,12 @@ final class AppearanceSettings: ObservableObject {
             self.mode = .system
         }
 
-        // Load saved font family or default to Iosevka
+        // Load saved font family or default to Iosevka Term
         if let savedFamily = UserDefaults.standard.string(forKey: "terminalFontFamily"),
            let family = FontFamily(rawValue: savedFamily) {
             self.fontFamily = family
         } else {
-            self.fontFamily = .iosevka
+            self.fontFamily = .iosevkaTerm
         }
 
         // Ensure the PostScript font name is always written

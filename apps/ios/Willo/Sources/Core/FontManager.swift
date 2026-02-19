@@ -52,20 +52,20 @@ final class FontManager {
         #endif
     }
 
-    /// Iosevka Nerd Font Mono info
-    static let iosevkaMono = FontFamily(
-        name: "Iosevka Nerd Font Mono",
-        regular: "IosevkaNerdFontMono-Regular",
-        bold: "IosevkaNerdFontMono-Bold",
-        italic: "IosevkaNerdFontMono-Italic",
-        boldItalic: "IosevkaNerdFontMono-BoldItalic"
+    /// Iosevka Term Nerd Font info
+    static let iosevkaTerm = FontFamily(
+        name: "Iosevka Term Nerd Font",
+        regular: "IosevkaTermNF",
+        bold: "IosevkaTermNF-Bold",
+        italic: "IosevkaTermNF-Italic",
+        boldItalic: "IosevkaTermNF-BoldItalic"
     )
 
     /// Get the best available terminal font
     func terminalFontName() -> String {
-        // Prefer Iosevka if available
-        if isFontAvailable(Self.iosevkaMono.regular) {
-            return Self.iosevkaMono.regular
+        // Prefer Iosevka Term if available
+        if isFontAvailable(Self.iosevkaTerm.regular) {
+            return Self.iosevkaTerm.regular
         }
 
         // Then JetBrains Mono
