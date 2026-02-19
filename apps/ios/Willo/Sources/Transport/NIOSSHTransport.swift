@@ -103,7 +103,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        logger.info("Connecting to \(config.host, privacy: .public):\(config.port)")
+        logger.info("Connecting to \(self.config.host, privacy: .public):\(self.config.port)")
 
         do {
             let channel = try await createSSHChannel()
@@ -129,7 +129,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        logger.info("Connecting for bootstrap to \(config.host, privacy: .public):\(config.port)")
+        logger.info("Connecting for bootstrap to \(self.config.host, privacy: .public):\(self.config.port)")
 
         do {
             let channel = try await createSSHChannel()
@@ -503,12 +503,9 @@ private struct CodableNIOSSHPublicKey: Codable {
     let keyData: Data
 
     init(_ key: NIOSSHPublicKey) {
-        // Use the description as a stable identifier — includes type + base64 data
         self.keyType = "\(type(of: key))"
-        // Serialize via the key's backing buffer representation
-        var buffer = ByteBufferAllocator().buffer(capacity: 256)
-        buffer.writeSSHHostKey(key)
-        self.keyData = Data(buffer.readableBytesView)
+        // Use the key's string description as stable serialization
+        self.keyData = Data(String(describing: key).utf8)
     }
 }
 

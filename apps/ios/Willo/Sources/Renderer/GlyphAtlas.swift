@@ -195,10 +195,7 @@ final class GlyphAtlas {
         }
 
         // Add discovered PostScript name for bundled Nerd Font if we have it
-        Self.fontPostScriptNamesLock.lock()
-        let nerdFontPSCopy = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"]
-        Self.fontPostScriptNamesLock.unlock()
-        if let nerdFontPS = nerdFontPSCopy {
+        if let nerdFontPS = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"] {
             fontNamesToTry.append(nerdFontPS)
         }
         // Add original names as fallback
