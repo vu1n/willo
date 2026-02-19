@@ -29,6 +29,9 @@ Carthage/Build/
 # Vendor frameworks (large binaries)
 vendor/frameworks/
 
+# Pre-built xcframeworks (downloaded from GitHub Releases at build time)
+apps/ios/Willo/Frameworks/*.xcframework
+
 # Build artifacts
 *.o
 

@@ -1,4 +1,0 @@
-module willo {
-    header "willo_bridge.h"
-    export *
-}
