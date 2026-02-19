@@ -29,6 +29,11 @@ Carthage/Build/
 # Vendor frameworks (large binaries)
 vendor/frameworks/
 
+# Vendor source (clone locally for development, not needed for CI)
+vendor/ghostty/
+vendor/build-mosh/
+vendor/blink-shell/
+
 # Pre-built xcframeworks (downloaded from GitHub Releases at build time)
 apps/ios/Willo/Frameworks/*.xcframework
 
