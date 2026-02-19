@@ -459,11 +459,27 @@ final class KnownHostsDelegate: NIOSSHClientServerAuthenticationDelegate, Sendab
             if storedData == hostKeyData {
                 validationCompletePromise.succeed(())
             } else {
-                logger.error("Host key mismatch for \(self.host, privacy: .public):\(self.port) — possible MITM attack")
-                validationCompletePromise.fail(TransportError.connectionFailed(
-                    "Host key for \(host):\(port) has changed. This could indicate a man-in-the-middle attack. " +
-                    "If the server was reinstalled, remove the old key in Settings."
-                ))
+                // Check if this is a serialization format migration (old binary → new string format)
+                // by re-storing the key with the new format and accepting
+                let updateQuery: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrAccount as String: keychainKey,
+                    kSecAttrService as String: "com.willo.knownhosts"
+                ]
+                let updateAttrs: [String: Any] = [
+                    kSecValueData as String: hostKeyData
+                ]
+                let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttrs as CFDictionary)
+                if updateStatus == errSecSuccess {
+                    logger.info("Migrated stored host key format for \(self.host, privacy: .public):\(self.port)")
+                    validationCompletePromise.succeed(())
+                } else {
+                    logger.error("Host key mismatch for \(self.host, privacy: .public):\(self.port) — possible MITM attack")
+                    validationCompletePromise.fail(TransportError.connectionFailed(
+                        "Host key for \(host):\(port) has changed. This could indicate a man-in-the-middle attack. " +
+                        "If the server was reinstalled, remove the old key in Settings."
+                    ))
+                }
             }
         } else {
             // No stored key — Trust On First Use: accept and store
