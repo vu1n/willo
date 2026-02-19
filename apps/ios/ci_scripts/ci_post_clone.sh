@@ -10,6 +10,9 @@ RELEASE_TAG="frameworks-v1"
 REPO="vu1n/willo"
 ARCHIVE_NAME="willo-frameworks.tar.gz"
 
+echo "==> Creating Frameworks directory"
+mkdir -p "$FRAMEWORKS_DIR"
+
 echo "==> Downloading xcframeworks from GitHub Release: $RELEASE_TAG"
 
 # Download the frameworks archive from GitHub Releases (public repo, no auth needed)
