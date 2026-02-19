@@ -141,8 +141,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Create command queue
         commandQueue = device.makeCommandQueue()
 
-        // Create glyph atlas - 24pt is good for iPad retina displays
-        glyphAtlas = GlyphAtlas(device: device, fontSize: 24.0)
+        // Create glyph atlas at retina resolution with configured font
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : 2.0
+        let fontPref = UserDefaults.standard.string(forKey: "terminalFontName")
+        glyphAtlas = GlyphAtlas(device: device, fontSize: 24.0, screenScale: scale, preferredFont: fontPref)
 
         // Use atlas cell metrics for proper sizing
         if let atlas = glyphAtlas {
@@ -262,12 +264,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
                         }
                     } else {
                         // Legacy format (less common now)
-                        guard let btnScalar = UnicodeScalar(32 + button),
-                              let colScalar = UnicodeScalar(32 + col),
-                              let rowScalar = UnicodeScalar(32 + row) else {
-                            break
-                        }
-                        let sequence = "\u{1B}[M\(Character(btnScalar))\(Character(colScalar))\(Character(rowScalar))"
+                        let sequence = "\u{1B}[M\(Character(UnicodeScalar(32 + button)!))\(Character(UnicodeScalar(32 + col)!))\(Character(UnicodeScalar(32 + row)!))"
                         if let data = sequence.data(using: .utf8) {
                             onInput?(data)
                         }
@@ -528,8 +525,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
         let clampedSize = max(14.0, min(32.0, newSize))
 
-        // Rebuild glyph atlas with new size
-        glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize)
+        // Rebuild glyph atlas with new size at retina resolution
+        let scale = contentScaleFactor > 0 ? contentScaleFactor : 2.0
+        let fontPref = UserDefaults.standard.string(forKey: "terminalFontName")
+        glyphAtlas = GlyphAtlas(device: device, fontSize: clampedSize, screenScale: scale, preferredFont: fontPref)
 
         // Update cell metrics
         if let atlas = glyphAtlas {
@@ -939,13 +938,10 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
 
-        // Only send mouse events if the terminal has mouse tracking enabled
-        if let modes = terminal?.getModes(),
-           modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
-            if let touch = touches.first {
-                let location = touch.location(in: self)
-                sendMouseEvent(location: location, isPress: true)
-            }
+        // Send mouse press event to terminal
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: true)
         }
 
         // Become first responder to show keyboard
@@ -957,26 +953,20 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
 
-        // Only send mouse events if the terminal has mouse tracking enabled
-        if let modes = terminal?.getModes(),
-           modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny {
-            if let touch = touches.first {
-                let location = touch.location(in: self)
-                sendMouseEvent(location: location, isPress: false)
-            }
+        // Send mouse release event to terminal
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: false)
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
 
-        // Only send mouse drag events if the terminal has mouse tracking enabled
-        if let modes = terminal?.getModes(),
-           modes.mouseEventButton || modes.mouseEventAny {
-            if let touch = touches.first {
-                let location = touch.location(in: self)
-                sendMouseEvent(location: location, isPress: true, isDrag: true)
-            }
+        // Send mouse drag event to terminal (button 0 + 32 for drag)
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            sendMouseEvent(location: location, isPress: true, isDrag: true)
         }
     }
 
@@ -1004,19 +994,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     // MARK: - Hardware Keyboard Support
 
-    /// Cached key commands array — rebuilt lazily
-    private var _cachedKeyCommands: [UIKeyCommand]?
-
     override var keyCommands: [UIKeyCommand]? {
-        if let cached = _cachedKeyCommands {
-            return cached
-        }
-        let commands = buildKeyCommands()
-        _cachedKeyCommands = commands
-        return commands
-    }
-
-    private func buildKeyCommands() -> [UIKeyCommand] {
         var commands: [UIKeyCommand] = []
 
         // Arrow keys
@@ -1131,8 +1109,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     @objc private func handleControlKey(_ command: UIKeyCommand) {
         guard let input = command.input, let char = input.first else { return }
         // Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A
-        guard let asciiValue = char.asciiValue else { return }
-        let controlCode = UInt8(asciiValue - 0x60)
+        let controlCode = UInt8(char.asciiValue! - 0x60)
         onInput?(Data([controlCode]))
     }
 

@@ -292,9 +292,7 @@ struct TerminalWorkspaceView: View {
             if let layout = layoutToUse, profile.multiplexer == .zellij {
                 // Use layout with session name (versioned filename for cache invalidation)
                 let layoutPath = "/tmp/willo-layout-\(layout.id)-v\(layout.contentHash).kdl"
-                let escapedPath = ShellEscape.escape(layoutPath)
-                let escapedName = ShellEscape.escape(sessionName)
-                command = "zellij --new-session-with-layout \(escapedPath) -s \(escapedName) 2>/dev/null || zellij attach -c \(escapedName)"
+                command = "zellij --new-session-with-layout \(layoutPath) -s \"\(sessionName)\" 2>/dev/null || zellij attach -c \"\(sessionName)\""
             } else {
                 // Standard namedSession behavior
                 command = StartupBehavior.namedSession.command(
@@ -326,13 +324,10 @@ struct TerminalWorkspaceView: View {
 
         // Only write if file doesn't exist (conditional write)
         // This avoids rewriting on every connect while ensuring updates are applied
-        let escapedLayoutPath = ShellEscape.escape(layoutPath)
-        // Use a unique heredoc delimiter that cannot appear in user content
-        let delimiter = "WILLO_LAYOUT_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         let writeCommand = """
-        [ -f \(escapedLayoutPath) ] || cat > \(escapedLayoutPath) << '\(delimiter)'
+        [ -f \(layoutPath) ] || cat > \(layoutPath) << 'WILLO_LAYOUT_EOF'
         \(layout.kdlContent)
-        \(delimiter)
+        WILLO_LAYOUT_EOF
 
         """
 
@@ -382,9 +377,8 @@ struct TerminalWorkspaceView: View {
         GlyphAtlas.ensureFontsRegistered()
 
         // Use the SAME calculation as GlyphAtlas.setupFonts() for consistency
-        // Create a temporary font to get accurate metrics
-        // NOTE: Must use PostScript name, not filename! The font's PS name is "JetBrainsMonoNF-Regular"
-        let fontName = "JetBrainsMonoNF-Regular"
+        // Read the configured font, falling back to Iosevka then JetBrains Mono
+        let fontName = UserDefaults.standard.string(forKey: "terminalFontName") ?? "IosevkaNerdFontMono-Regular"
         let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
 
         let ascent = CTFontGetAscent(font)
@@ -647,12 +641,7 @@ struct TerminalStatusBar: View {
                         onDisconnect()
                     }
                     .help("Disconnect")
-                } else if case .disconnected = sessionState {
-                    IndustrialIconButton(icon: "bolt.fill", isActive: true, activeColor: .terminalGreen) {
-                        onReconnect()
-                    }
-                    .help("Connect")
-                } else if case .error = sessionState {
+                } else if sessionState == .disconnected || sessionState == .error(NSError()) {
                     IndustrialIconButton(icon: "bolt.fill", isActive: true, activeColor: .terminalGreen) {
                         onReconnect()
                     }

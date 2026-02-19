@@ -13,7 +13,8 @@ private let logger = Logger(subsystem: "com.willo.app", category: "GlyphAtlas")
 ///
 /// This class manages a texture atlas containing pre-rendered glyphs.
 /// Key features:
-///   - 1px transparent padding around each glyph (prevents texture bleeding)
+///   - Retina-aware rendering (glyphs rendered at device pixel resolution)
+///   - 2px transparent padding around each glyph (prevents texture bleeding)
 ///   - LRU cache for dynamic glyph loading
 ///   - Separate regions for ASCII (pre-populated) and extended characters
 final class GlyphAtlas {
@@ -50,27 +51,32 @@ final class GlyphAtlas {
     private var packY: Int = 2
     private var rowHeight: Int = 0
 
-    /// Atlas dimensions
-    private let atlasWidth: Int = 1024
-    private let atlasHeight: Int = 1024
+    /// Atlas dimensions — sized for retina glyphs
+    private let atlasWidth: Int
+    private let atlasHeight: Int
 
-    /// Padding around each glyph (prevents texture bleeding with nearest sampling)
+    /// Padding around each glyph (prevents texture bleeding)
     private let glyphPadding: Int = 2
 
     /// Font settings
     private let fontSize: CGFloat
+    private let screenScale: CGFloat
+    private let renderFontSize: CGFloat
     private var regularFont: CTFont?
     private var boldFont: CTFont?
     private var italicFont: CTFont?
     private var boldItalicFont: CTFont?
 
-    /// Cell metrics
+    /// Cell metrics in POINTS (for layout calculations)
     private(set) var cellWidth: CGFloat = 0
     private(set) var cellHeight: CGFloat = 0
     private(set) var baseline: CGFloat = 0
 
     /// Metal device reference
     private let device: MTLDevice
+
+    /// Preferred font family (nil = use default fallback chain)
+    private let preferredFont: String?
 
     // MARK: - Initialization
 
@@ -83,9 +89,16 @@ final class GlyphAtlas {
         registerBundledFonts()
     }
 
-    init(device: MTLDevice, fontSize: CGFloat = 24.0) {
+    init(device: MTLDevice, fontSize: CGFloat = 24.0, screenScale: CGFloat = 2.0, preferredFont: String? = nil) {
         self.device = device
         self.fontSize = fontSize
+        self.screenScale = max(screenScale, 1.0)
+        self.renderFontSize = fontSize * self.screenScale
+        self.preferredFont = preferredFont
+
+        // Scale atlas for retina: 2048 for 2x, 4096 for 3x
+        self.atlasWidth = self.screenScale > 2.0 ? 4096 : 2048
+        self.atlasHeight = self.screenScale > 2.0 ? 4096 : 2048
 
         Self.registerBundledFonts()
         setupFonts()
@@ -133,9 +146,7 @@ final class GlyphAtlas {
     }
 
     /// Maps font file names to their actual PostScript names (discovered at registration)
-    /// Protected by fontPostScriptNamesLock for thread safety
     private static var fontPostScriptNames: [String: String] = [:]
-    private static let fontPostScriptNamesLock = NSLock()
 
     private static func registerFont(at url: URL, name: String) -> Bool {
         var error: Unmanaged<CFError>?
@@ -144,9 +155,7 @@ final class GlyphAtlas {
             if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
                let descriptor = descriptors.first,
                let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
-                fontPostScriptNamesLock.lock()
                 fontPostScriptNames[name] = psName
-                fontPostScriptNamesLock.unlock()
                 logger.info("Registered font: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
             } else {
                 logger.info("Registered font: \(name, privacy: .public) (couldn't get PostScript name)")
@@ -160,9 +169,7 @@ final class GlyphAtlas {
                 if let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
                    let descriptor = descriptors.first,
                    let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String {
-                    fontPostScriptNamesLock.lock()
                     fontPostScriptNames[name] = psName
-                    fontPostScriptNamesLock.unlock()
                     logger.debug("Font already registered: \(name, privacy: .public) -> PostScript name: '\(psName, privacy: .public)'")
                 } else {
                     logger.debug("Font already registered: \(name, privacy: .public)")
@@ -175,11 +182,15 @@ final class GlyphAtlas {
     }
 
     private func setupFonts() {
-        // Use JetBrains Mono if available, fallback to Menlo
-        // First try the discovered PostScript names from registration, then fallbacks
+        // Build font fallback chain: preferred → JetBrains Mono → Menlo
         var fontNamesToTry: [String] = []
 
-        // Add discovered PostScript name for Nerd Font if we have it
+        // Add preferred font if specified (e.g., Iosevka Nerd Font Mono)
+        if let preferred = preferredFont, !preferred.isEmpty {
+            fontNamesToTry.append(preferred)
+        }
+
+        // Add discovered PostScript name for bundled Nerd Font if we have it
         Self.fontPostScriptNamesLock.lock()
         let nerdFontPSCopy = Self.fontPostScriptNames["JetBrainsMonoNerdFont-Regular"]
         Self.fontPostScriptNamesLock.unlock()
@@ -191,14 +202,15 @@ final class GlyphAtlas {
 
         logger.debug("Looking for fonts: \(fontNamesToTry, privacy: .public)")
 
+        // Create font at renderFontSize (fontSize * screenScale) for pixel-resolution glyphs
         for fontName in fontNamesToTry {
-            let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
+            let font = CTFontCreateWithName(fontName as CFString, renderFontSize, nil)
             // Check if we got the font we asked for (not a fallback)
             if let actualName = CTFontCopyPostScriptName(font) as String? {
                 logger.debug("Requested '\(fontName, privacy: .public)', got '\(actualName, privacy: .public)'")
                 if actualName == fontName {
                     regularFont = font
-                    logger.info("Using font: \(actualName, privacy: .public)")
+                    logger.info("Using font: \(actualName, privacy: .public) at \(self.renderFontSize)pt (render size)")
 
                     // Test if font has box drawing characters
                     let testCodepoint: UInt32 = 0x2502 // │ BOX DRAWINGS LIGHT VERTICAL
@@ -217,32 +229,33 @@ final class GlyphAtlas {
 
         // Fallback to system monospace
         if regularFont == nil {
-            regularFont = CTFontCreateWithName("Menlo-Regular" as CFString, fontSize, nil)
+            regularFont = CTFontCreateWithName("Menlo-Regular" as CFString, renderFontSize, nil)
             logger.warning("Falling back to Menlo font")
         }
 
         guard let regular = regularFont else { return }
 
-        // Create style variants
+        // Create style variants at render size
         boldFont = CTFontCreateCopyWithSymbolicTraits(
-            regular, fontSize, nil, .boldTrait, .boldTrait
+            regular, renderFontSize, nil, .boldTrait, .boldTrait
         ) ?? regular
 
         italicFont = CTFontCreateCopyWithSymbolicTraits(
-            regular, fontSize, nil, .italicTrait, .italicTrait
+            regular, renderFontSize, nil, .italicTrait, .italicTrait
         ) ?? regular
 
         boldItalicFont = CTFontCreateCopyWithSymbolicTraits(
-            regular, fontSize, nil, [.boldTrait, .italicTrait], [.boldTrait, .italicTrait]
+            regular, renderFontSize, nil, [.boldTrait, .italicTrait], [.boldTrait, .italicTrait]
         ) ?? regular
 
-        // Calculate cell metrics
+        // Calculate cell metrics at render resolution, then convert back to points
         let ascent = CTFontGetAscent(regular)
         let descent = CTFontGetDescent(regular)
         let leading = CTFontGetLeading(regular)
 
-        cellHeight = ceil(ascent + descent + leading)
-        baseline = ceil(descent)
+        // Divide by screenScale to get point dimensions for layout
+        cellHeight = ceil((ascent + descent + leading) / screenScale)
+        baseline = ceil(descent / screenScale)
 
         // Get advance width for 'M' using character lookup (more reliable than glyph name)
         var chars: [UniChar] = [0x4D] // 'M' character
@@ -252,7 +265,7 @@ final class GlyphAtlas {
         var advance: CGSize = .zero
         if gotGlyphs && glyphs[0] != 0 {
             CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyphs, &advance, 1)
-            cellWidth = ceil(advance.width)
+            cellWidth = ceil(advance.width / screenScale)
         } else {
             // Fallback: estimate based on font size (monospace fonts are ~0.6x font size)
             cellWidth = ceil(fontSize * 0.6)
@@ -263,8 +276,8 @@ final class GlyphAtlas {
         if cellWidth < 1 { cellWidth = ceil(fontSize * 0.6) }
         if cellHeight < 1 { cellHeight = ceil(fontSize * 1.2) }
 
-        logger.info("Font metrics for \(self.fontSize)pt: ascent=\(ascent), descent=\(descent), leading=\(leading)")
-        logger.info("Cell metrics: width=\(self.cellWidth), height=\(self.cellHeight), gotGlyphs=\(gotGlyphs), glyph=\(glyphs[0])")
+        logger.info("Font metrics for \(self.fontSize)pt @\(self.screenScale)x: ascent=\(ascent), descent=\(descent), leading=\(leading)")
+        logger.info("Cell metrics (points): width=\(self.cellWidth), height=\(self.cellHeight)")
     }
 
     private func createTexture() {
@@ -375,7 +388,8 @@ final class GlyphAtlas {
         let attrString = NSAttributedString(string: String(char), attributes: attributes)
         let line = CTLineCreateWithAttributedString(attrString)
 
-        // Get glyph bounds
+        // Get glyph bounds — these are in render units (pixels at scale 1.0)
+        // because the font was created at renderFontSize = fontSize * screenScale
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         var leading: CGFloat = 0
@@ -406,7 +420,7 @@ final class GlyphAtlas {
 
         rowHeight = max(rowHeight, glyphHeight)
 
-        // Create bitmap context for rendering
+        // Create bitmap context for rendering at pixel resolution
         let bitmapWidth = glyphWidth
         let bitmapHeight = glyphHeight
         let bytesPerRow = bitmapWidth
@@ -414,7 +428,12 @@ final class GlyphAtlas {
 
         // Render glyph to bitmap using cross-platform approach
         #if os(iOS)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: bitmapWidth, height: bitmapHeight))
+        // Use scale = 1.0 so bitmap dimensions ARE pixel dimensions (no extra scaling)
+        // The font is already at renderFontSize (fontSize * screenScale), so glyphs
+        // are rendered at full retina resolution.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: bitmapWidth, height: bitmapHeight), format: format)
         let image = renderer.image { rendererCtx in
             UIColor.black.setFill()
             rendererCtx.fill(CGRect(x: 0, y: 0, width: bitmapWidth, height: bitmapHeight))
@@ -474,6 +493,7 @@ final class GlyphAtlas {
         }
 
         // Draw the image into grayscale context to extract luminance
+        // With format.scale = 1.0, cgImage is exactly bitmapWidth x bitmapHeight — no downsampling
         extractContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: bitmapWidth, height: bitmapHeight))
 
         // Copy to Metal texture
