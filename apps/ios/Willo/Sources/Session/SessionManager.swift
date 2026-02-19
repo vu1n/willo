@@ -47,23 +47,13 @@ final class SessionManager: ObservableObject {
             }
     }
 
-    /// Active reconnection tasks keyed by session ID — prevents duplicate reconnections
-    private var reconnectionTasks: [UUID: Task<Void, Never>] = [:]
-
     /// Attempt to reconnect all sessions that were disconnected due to network loss
     private func reconnectDisconnectedSessions() async {
         for session in sessions where session.state == .disconnected {
             guard sessionConfigs[session.id] != nil else { continue }
-            // Skip if reconnection is already in progress for this session
-            if let existing = reconnectionTasks[session.id], !existing.isCancelled {
-                continue
+            Task {
+                try? await reconnect(session)
             }
-            let sessionId = session.id
-            let task = Task { [weak self] in
-                try? await self?.reconnect(session)
-                self?.reconnectionTasks.removeValue(forKey: sessionId)
-            }
-            reconnectionTasks[session.id] = task
         }
     }
 

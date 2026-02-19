@@ -32,9 +32,6 @@ final class CloudSyncManager: ObservableObject {
         case lastSyncTimestamp = "willo.lastSync"
     }
 
-    /// NSUbiquitousKeyValueStore total limit is 1MB; individual values max ~256KB
-    private let iCloudMaxValueSize = 256 * 1024  // 256 KB per value
-
     // MARK: - State
 
     /// Whether iCloud sync is available
@@ -167,11 +164,6 @@ final class CloudSyncManager: ObservableObject {
             }
 
             let data = try JSONEncoder().encode(syncableSessions)
-            guard data.count < iCloudMaxValueSize else {
-                logger.warning("Sessions data too large for iCloud (\(data.count) bytes)")
-                syncState = .error("Sessions data exceeds iCloud size limit")
-                return
-            }
             cloudStore.set(data, forKey: CloudKey.sessions.rawValue)
             cloudStore.synchronize()
 
@@ -257,11 +249,6 @@ final class CloudSyncManager: ObservableObject {
             }
 
             let data = try JSONEncoder().encode(syncableProfiles)
-            guard data.count < iCloudMaxValueSize else {
-                logger.warning("Profiles data too large for iCloud (\(data.count) bytes)")
-                syncState = .error("Profiles data exceeds iCloud size limit")
-                return
-            }
             cloudStore.set(data, forKey: CloudKey.serverProfiles.rawValue)
             cloudStore.synchronize()
 
@@ -343,11 +330,6 @@ final class CloudSyncManager: ObservableObject {
 
         do {
             let data = try JSONEncoder().encode(layouts)
-            guard data.count < iCloudMaxValueSize else {
-                logger.warning("Layouts data too large for iCloud (\(data.count) bytes)")
-                syncState = .error("Layouts data exceeds iCloud size limit")
-                return
-            }
             cloudStore.set(data, forKey: CloudKey.layouts.rawValue)
             cloudStore.synchronize()
 

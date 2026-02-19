@@ -53,12 +53,7 @@ final class MoshTransport: TerminalTransport, @unchecked Sendable {
 
     // Thread for mosh_main (using pthread_create like Blink, not GCD)
     private var moshThread: pthread_t?
-    private let isRunningLock = NSLock()
-    private var _isRunning = false
-    private var isRunning: Bool {
-        get { isRunningLock.lock(); defer { isRunningLock.unlock() }; return _isRunning }
-        set { isRunningLock.lock(); _isRunning = newValue; isRunningLock.unlock() }
-    }
+    private var isRunning = false
 
     /// Terminal size
     private var terminalCols: UInt16

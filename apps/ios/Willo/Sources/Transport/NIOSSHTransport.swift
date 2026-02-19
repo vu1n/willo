@@ -94,8 +94,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
     }
 
     deinit {
-        // Use async shutdown to avoid deadlock if deinit runs on an NIO event loop thread
-        group.shutdownGracefully { _ in }
+        try? group.syncShutdownGracefully()
     }
 
     // MARK: - Connection
@@ -104,7 +103,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        logger.info("Connecting to \(self.config.host, privacy: .public):\(self.config.port)")
+        logger.info("Connecting to \(config.host, privacy: .public):\(config.port)")
 
         do {
             let channel = try await createSSHChannel()
@@ -130,7 +129,7 @@ final class NIOSSHTransport: TerminalTransport, @unchecked Sendable {
         guard await stateActor.state == .disconnected else { return }
 
         await stateActor.setState(.connecting)
-        logger.info("Connecting for bootstrap to \(self.config.host, privacy: .public):\(self.config.port)")
+        logger.info("Connecting for bootstrap to \(config.host, privacy: .public):\(config.port)")
 
         do {
             let channel = try await createSSHChannel()
@@ -459,27 +458,11 @@ final class KnownHostsDelegate: NIOSSHClientServerAuthenticationDelegate, Sendab
             if storedData == hostKeyData {
                 validationCompletePromise.succeed(())
             } else {
-                // Check if this is a serialization format migration (old binary → new string format)
-                // by re-storing the key with the new format and accepting
-                let updateQuery: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrAccount as String: keychainKey,
-                    kSecAttrService as String: "com.willo.knownhosts"
-                ]
-                let updateAttrs: [String: Any] = [
-                    kSecValueData as String: hostKeyData
-                ]
-                let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttrs as CFDictionary)
-                if updateStatus == errSecSuccess {
-                    logger.info("Migrated stored host key format for \(self.host, privacy: .public):\(self.port)")
-                    validationCompletePromise.succeed(())
-                } else {
-                    logger.error("Host key mismatch for \(self.host, privacy: .public):\(self.port) — possible MITM attack")
-                    validationCompletePromise.fail(TransportError.connectionFailed(
-                        "Host key for \(host):\(port) has changed. This could indicate a man-in-the-middle attack. " +
-                        "If the server was reinstalled, remove the old key in Settings."
-                    ))
-                }
+                logger.error("Host key mismatch for \(self.host, privacy: .public):\(self.port) — possible MITM attack")
+                validationCompletePromise.fail(TransportError.connectionFailed(
+                    "Host key for \(host):\(port) has changed. This could indicate a man-in-the-middle attack. " +
+                    "If the server was reinstalled, remove the old key in Settings."
+                ))
             }
         } else {
             // No stored key — Trust On First Use: accept and store
@@ -520,9 +503,12 @@ private struct CodableNIOSSHPublicKey: Codable {
     let keyData: Data
 
     init(_ key: NIOSSHPublicKey) {
+        // Use the description as a stable identifier — includes type + base64 data
         self.keyType = "\(type(of: key))"
-        // Use the key's string description as stable serialization
-        self.keyData = Data(String(describing: key).utf8)
+        // Serialize via the key's backing buffer representation
+        var buffer = ByteBufferAllocator().buffer(capacity: 256)
+        buffer.writeSSHHostKey(key)
+        self.keyData = Data(buffer.readableBytesView)
     }
 }
 
@@ -765,11 +751,7 @@ extension NIOSSHTransport {
         }.get()
 
         // We'll create the handle after we have the child channel
-        // Use a class wrapper to safely capture the handle from the closure
-        final class HandleBox: @unchecked Sendable {
-            var handle: BridgeChannelHandle?
-        }
-        let handleBox = HandleBox()
+        var bridgeHandle: BridgeChannelHandle!
 
         // Create child channel on the event loop
         let childChannel = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Channel, Error>) in
@@ -790,17 +772,13 @@ extension NIOSSHTransport {
                         onData: onData,
                         onClose: onClose
                     )
-                    handleBox.handle = handle
+                    bridgeHandle = handle
 
                     return childChannel.pipeline.addHandlers([
                         BridgeDataHandler(handle: handle)
                     ])
                 }
             }
-        }
-
-        guard let bridgeHandle = handleBox.handle else {
-            throw TransportError.connectionFailed("Bridge channel handle was not created")
         }
 
         // Execute the command

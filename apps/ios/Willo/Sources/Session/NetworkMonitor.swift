@@ -2,7 +2,6 @@ import Foundation
 import Network
 
 /// Monitors network connectivity changes using NWPathMonitor
-@MainActor
 final class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
 

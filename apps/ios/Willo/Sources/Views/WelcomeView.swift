@@ -170,12 +170,12 @@ struct WelcomeView: View {
 
         // Try to find unique name
         for _ in 0..<50 {
-            let name = "\(adjectives.randomElement() ?? "wild")-\(nouns.randomElement() ?? "star")"
+            let name = "\(adjectives.randomElement()!)-\(nouns.randomElement()!)"
             if !existingNames.contains(name) {
                 return name
             }
         }
-        return "\(adjectives.randomElement() ?? "wild")-\(nouns.randomElement() ?? "star")-\(Int.random(in: 1...99))"
+        return "\(adjectives.randomElement()!)-\(nouns.randomElement()!)-\(Int.random(in: 1...99))"
     }
 }
 

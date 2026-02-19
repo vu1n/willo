@@ -167,10 +167,9 @@ enum CapabilityDetector {
             }
 
             // Append chunk to temp file (using printf to handle special chars)
-            let escapedChunk = ShellEscape.escape(chunkString)
             let appendCmd = offset == 0
-                ? "printf '%s' \(escapedChunk) > \"$HOME/.willo/willo-bridge.wasm.b64\""
-                : "printf '%s' \(escapedChunk) >> \"$HOME/.willo/willo-bridge.wasm.b64\""
+                ? "printf '%s' '\(chunkString)' > \"$HOME/.willo/willo-bridge.wasm.b64\""
+                : "printf '%s' '\(chunkString)' >> \"$HOME/.willo/willo-bridge.wasm.b64\""
 
             _ = try await transport.executeCommand(appendCmd)
             offset = end
@@ -197,9 +196,8 @@ enum CapabilityDetector {
         }
 
         // Write version file
-        let escapedVersion = ShellEscape.escape(pluginVersion)
         _ = try await transport.executeCommand("""
-            echo \(escapedVersion) > "$HOME/.willo/willo-bridge.version"
+            echo '\(pluginVersion)' > "$HOME/.willo/willo-bridge.version"
         """)
     }
 }

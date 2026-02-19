@@ -10,7 +10,7 @@ struct SSHTestView: View {
     @State private var password: String = ""
     @State private var connectionStatus: String = "Not connected"
     @State private var outputText: String = ""
-    @State private var transport: NIOSSHTransport?
+    @State private var transport: CitadelSSHTransport?
     @State private var isConnecting = false
     @State private var inputText: String = ""
 
@@ -140,15 +140,31 @@ struct SSHTestView: View {
             terminalRows: 24
         )
 
-        let newTransport = NIOSSHTransport(config: config)
+        let newTransport = CitadelSSHTransport(config: config)
 
         // Initialize streams before connecting (fixes race condition)
         newTransport.initializeStreams()
 
         self.transport = newTransport
 
+        // Start data reading task first
         Task {
-            // Connect first
+            for await data in newTransport.dataStream {
+                if let text = String(data: data, encoding: .utf8) {
+                    await MainActor.run {
+                        outputText += text
+                    }
+                }
+            }
+
+            await MainActor.run {
+                connectionStatus = "Disconnected"
+                transport = nil
+            }
+        }
+
+        // Then connect
+        Task {
             do {
                 try await newTransport.connect()
 
@@ -162,21 +178,6 @@ struct SSHTestView: View {
                     isConnecting = false
                     transport = nil
                 }
-                return
-            }
-
-            // Then consume data stream (only after successful connection)
-            for await data in newTransport.dataStream {
-                if let text = String(data: data, encoding: .utf8) {
-                    await MainActor.run {
-                        outputText += text
-                    }
-                }
-            }
-
-            await MainActor.run {
-                connectionStatus = "Disconnected"
-                transport = nil
             }
         }
     }

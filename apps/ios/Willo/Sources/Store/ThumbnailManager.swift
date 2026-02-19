@@ -52,7 +52,7 @@ final class ThumbnailManager: ObservableObject {
         startCaptureTimer()
     }
 
-    deinit {
+    nonisolated deinit {
         // Timer cleanup handled by ARC - timer holds weak self
     }
 
@@ -111,9 +111,7 @@ final class ThumbnailManager: ObservableObject {
             withTimeInterval: captureInterval,
             repeats: true
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.captureAllSnapshots()
-            }
+            self?.captureAllSnapshots()
         }
     }
 
