@@ -123,9 +123,6 @@ final class AppearanceSettings: ObservableObject {
             self.fontFamily = .iosevkaTerm
         }
 
-        // Ensure the PostScript font name is always written
-        UserDefaults.standard.set(fontFamily.fontName, forKey: "terminalFontName")
-
         // Load saved font size or default
         let savedFontSize = UserDefaults.standard.double(forKey: "terminalFontSize")
         if savedFontSize >= Self.minFontSize && savedFontSize <= Self.maxFontSize {
@@ -133,6 +130,9 @@ final class AppearanceSettings: ObservableObject {
         } else {
             self.fontSize = Self.defaultFontSize
         }
+
+        // Ensure the PostScript font name is always written (after all properties initialized)
+        UserDefaults.standard.set(fontFamily.fontName, forKey: "terminalFontName")
     }
 
     /// The resolved color scheme based on user preference and system
