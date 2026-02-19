@@ -252,7 +252,7 @@ struct UserLayout: Identifiable, Codable, Equatable {
 /// Each session corresponds to a multiplexer session (zellij/tmux) on a server
 struct WilloSession: Identifiable, Equatable {
     let id: UUID
-    let serverProfile: ServerProfile
+    var serverProfile: ServerProfile
     var name: String
     var description: String
     var color: SessionColor

@@ -486,14 +486,14 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         // Cancel any existing fallback
         syncFallbackWorkItem?.cancel()
 
-        // Schedule fallback render after 16ms (roughly one frame at 60fps)
-        // This gives time for more data to arrive while not causing visible delay
+        // Use one frame interval as the fallback timeout (8.3ms at 120Hz, 16.6ms at 60Hz)
+        let frameInterval = 1.0 / Double(preferredFramesPerSecond > 0 ? preferredFramesPerSecond : 60)
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.setNeedsDisplay()
         }
         syncFallbackWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + frameInterval, execute: workItem)
     }
 
     /// Update the terminal grid with new cell data
@@ -566,12 +566,17 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
 
     /// Override setNeedsDisplay to implement frame coalescing
     /// Prevents CPU thrashing when data arrives faster than frame rate
+    /// Key invariant: a pending render ALWAYS fires — new requests mark needsRender
+    /// so the deferred callback picks up the latest state
     override func setNeedsDisplay() {
         let now = CACurrentMediaTime()
         let minFrameInterval = 1.0 / 120.0  // Max 120 FPS
 
-        // If we already have a pending render scheduled, don't schedule another
-        guard !hasPendingRender else {
+        // If we already have a deferred render scheduled, mark that we need it
+        // but don't schedule another timer — the pending one will fire and pick up
+        // our needsRender flag
+        if hasPendingRender {
+            needsRender = true
             return
         }
 
@@ -582,6 +587,7 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         } else {
             // Schedule a deferred render after the minimum frame interval
             hasPendingRender = true
+            needsRender = true
             let delay = minFrameInterval - (now - lastRenderTime)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self else { return }
@@ -666,14 +672,17 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         }
 
         let nativeDirty = terminal.checkDirty()
-        guard nativeDirty || needsRender else {
+        let shouldRender = nativeDirty || needsRender
+        guard shouldRender else {
             // Nothing to render - present empty drawable to maintain frame timing
             guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
             commandBuffer.present(drawable)
             commandBuffer.commit()
             return
         }
-        needsRender = false  // Clear our flag
+        // Clear needsRender AFTER confirming we will render but BEFORE building GPU commands.
+        // Any new feed() calls during GPU work will set it again for the next frame.
+        needsRender = false
 
         // Scale factor to convert points to pixels
         let scale = contentScaleFactor
@@ -877,6 +886,16 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         return (r + m, g + m, bl + m)
     }
 
+    // MARK: - UITextInputTraits (disable iOS smart punctuation)
+
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var keyboardType: UIKeyboardType = .asciiCapable
+
     // MARK: - UIKeyInput
 
     var hasText: Bool {
@@ -935,11 +954,17 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         return true
     }
 
+    /// Whether the terminal currently has mouse tracking enabled
+    private var mouseTrackingEnabled: Bool {
+        guard let modes = terminal?.getModes() else { return false }
+        return modes.mouseEventNormal || modes.mouseEventButton || modes.mouseEventAny
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
 
-        // Send mouse press event to terminal
-        if let touch = touches.first {
+        // Only send mouse events when the terminal has mouse tracking enabled
+        if mouseTrackingEnabled, let touch = touches.first {
             let location = touch.location(in: self)
             sendMouseEvent(location: location, isPress: true)
         }
@@ -953,8 +978,8 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
 
-        // Send mouse release event to terminal
-        if let touch = touches.first {
+        // Only send mouse events when the terminal has mouse tracking enabled
+        if mouseTrackingEnabled, let touch = touches.first {
             let location = touch.location(in: self)
             sendMouseEvent(location: location, isPress: false)
         }
@@ -963,15 +988,20 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
 
-        // Send mouse drag event to terminal (button 0 + 32 for drag)
-        if let touch = touches.first {
+        // Only send mouse drag events when terminal has button/any mouse tracking
+        if let modes = terminal?.getModes(),
+           modes.mouseEventButton || modes.mouseEventAny,
+           let touch = touches.first {
             let location = touch.location(in: self)
             sendMouseEvent(location: location, isPress: true, isDrag: true)
         }
     }
 
     /// Convert tap location to terminal cell coordinates and send mouse event
+    /// Only call when mouse tracking is confirmed enabled
     private func sendMouseEvent(location: CGPoint, isPress: Bool, isDrag: Bool = false) {
+        guard let modes = terminal?.getModes() else { return }
+
         // Convert point coordinates to cell coordinates
         let col = Int(location.x / cellWidth) + 1  // 1-based
         let row = Int(location.y / cellHeight) + 1  // 1-based
@@ -980,15 +1010,22 @@ final class WilloTerminalView: MTKView, MTKViewDelegate, UIKeyInput {
         let clampedCol = max(1, min(col, cols))
         let clampedRow = max(1, min(row, rows))
 
-        // SGR mouse encoding: CSI < button ; x ; y M/m
-        // M for press, m for release
         // button: 0 = left click, 32 = drag
         let button = isDrag ? 32 : 0
         let suffix = isPress ? "M" : "m"
-        let sequence = "\u{1B}[<\(button);\(clampedCol);\(clampedRow)\(suffix)"
 
-        if let data = sequence.data(using: .utf8) {
-            onInput?(data)
+        if modes.mouseFormatSGR {
+            // SGR mouse encoding: CSI < button ; x ; y M/m
+            let sequence = "\u{1B}[<\(button);\(clampedCol);\(clampedRow)\(suffix)"
+            if let data = sequence.data(using: .utf8) {
+                onInput?(data)
+            }
+        } else {
+            // Legacy X10/normal encoding: CSI M button+32 col+32 row+32
+            let sequence = "\u{1B}[M\(Character(UnicodeScalar(32 + button)!))\(Character(UnicodeScalar(32 + clampedCol)!))\(Character(UnicodeScalar(32 + clampedRow)!))"
+            if let data = sequence.data(using: .utf8) {
+                onInput?(data)
+            }
         }
     }
 

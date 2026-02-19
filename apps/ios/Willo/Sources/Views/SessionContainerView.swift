@@ -9,6 +9,7 @@ struct SessionContainerView: View {
     @EnvironmentObject var appearanceSettings: AppearanceSettings
     @State private var showingNewSession = false
     @State private var showingSessionGrid = false
+    @State private var showingServerProfiles = false
     @State private var swipeOffset: CGFloat = 0
     @State private var swipeDirection: SwipeDirection?
     @State private var highlightedSessionId: UUID?
@@ -77,6 +78,9 @@ struct SessionContainerView: View {
         .sheet(isPresented: $showingSessionGrid) {
             SessionGridView()
         }
+        .sheet(isPresented: $showingServerProfiles) {
+            ServerProfilesView()
+        }
         .gesture(pullDownGesture)
         .focusable()
         .focused($isFocused)
@@ -100,11 +104,15 @@ struct SessionContainerView: View {
             // Phone: compact dots
             CompactSessionTabBar(highlightedSessionId: highlightedSessionId) {
                 showingNewSession = true
+            } onManageServers: {
+                showingServerProfiles = true
             }
         } else {
             // iPad: full tab bar
             SessionTabBar(highlightedSessionId: highlightedSessionId) {
                 showingNewSession = true
+            } onManageServers: {
+                showingServerProfiles = true
             }
         }
     }

@@ -43,6 +43,9 @@ struct TerminalWorkspaceView: View {
                                 try? await session.transport.send(data)
                             }
                         }
+                    },
+                    onToggleTransport: {
+                        toggleTransportAndReconnect()
                     }
                 )
 
@@ -222,6 +225,11 @@ struct TerminalWorkspaceView: View {
                 try await sessionManager.connect(newSession)
                 sessionState = .connected
 
+                // Update last connected timestamp on the server profile
+                if let index = appState.serverProfiles.firstIndex(where: { $0.id == workspace.serverProfile.id }) {
+                    appState.serverProfiles[index].lastConnected = Date()
+                }
+
                 // Cache the session for tab switching
                 sessionStore.setTerminalSession(newSession, for: workspace.id)
                 logger.debug("Cached session for workspace \(workspace.id, privacy: .public)")
@@ -337,6 +345,23 @@ struct TerminalWorkspaceView: View {
 
         // Brief wait for file check/write
         try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+    }
+
+    private func toggleTransportAndReconnect() {
+        // Toggle preferMosh on the server profile (persistent)
+        if let index = appState.serverProfiles.firstIndex(where: { $0.id == workspace.serverProfile.id }) {
+            appState.serverProfiles[index].preferMosh.toggle()
+
+            // Also update the session store's copy so the UI reflects the change
+            let updatedProfile = appState.serverProfiles[index]
+            sessionStore.updateServerProfile(updatedProfile, for: workspace.id)
+        }
+
+        // Disconnect and reconnect with new transport
+        Task {
+            await disconnect()
+            await connect()
+        }
     }
 
     private func disconnect() async {
@@ -573,6 +598,7 @@ struct TerminalStatusBar: View {
     let onDisconnect: () -> Void
     let onReconnect: () -> Void
     let onVoiceText: (String) -> Void
+    var onToggleTransport: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -596,6 +622,30 @@ struct TerminalStatusBar: View {
                             Text(workspace.sessionName)
                                 .font(.willoCaption)
                                 .foregroundStyle(Color.textTertiary)
+                        }
+
+                        // Transport type badge (tap to toggle SSH/Mosh)
+                        if let onToggle = onToggleTransport {
+                            Button(action: onToggle) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: workspace.serverProfile.preferMosh ? "bolt.fill" : "lock.fill")
+                                        .font(.system(size: 8, weight: .bold))
+                                    Text(workspace.serverProfile.preferMosh ? "MOSH" : "SSH")
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                }
+                                .foregroundStyle(workspace.serverProfile.preferMosh ? Color.terminalAmber : Color.terminalCyan)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background {
+                                    Capsule()
+                                        .fill((workspace.serverProfile.preferMosh ? Color.terminalAmber : Color.terminalCyan).opacity(0.15))
+                                        .overlay {
+                                            Capsule()
+                                                .strokeBorder((workspace.serverProfile.preferMosh ? Color.terminalAmber : Color.terminalCyan).opacity(0.3), lineWidth: 1)
+                                        }
+                                }
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }

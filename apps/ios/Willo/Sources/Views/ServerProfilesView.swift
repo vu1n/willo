@@ -249,6 +249,8 @@ struct ProfileEditorView: View {
     @State private var isInstallingKey = false
     @State private var keyInstallResult: KeyInstallResult?
     @State private var showingKeyInstallConfirm = false
+    @State private var showingKeyInstallPasswordPrompt = false
+    @State private var keyInstallPassword: String = ""
 
     private var authMethodType: Int {
         switch profile.authMethod {
@@ -306,6 +308,17 @@ struct ProfileEditorView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert("Password Required", isPresented: $showingKeyInstallPasswordPrompt) {
+            SecureField("Server password", text: $keyInstallPassword)
+            Button("Install") {
+                installSSHKey()
+            }
+            Button("Cancel", role: .cancel) {
+                keyInstallPassword = ""
+            }
+        } message: {
+            Text("Enter your password for \(profile.username)@\(profile.hostname) to install the SSH key.")
+        }
     }
 
     // MARK: - Section Views
@@ -360,9 +373,6 @@ struct ProfileEditorView: View {
                     }
                     AuthMethodButton(title: "Password", icon: "lock.fill", isSelected: authMethodType == 1) {
                         profile.authMethod = .password
-                    }
-                    AuthMethodButton(title: "Agent", icon: "person.fill", isSelected: authMethodType == 2) {
-                        profile.authMethod = .agent
                     }
                 }
 
@@ -671,21 +681,24 @@ struct ProfileEditorView: View {
             return
         }
 
+        // Determine password for the one-time authentication
+        let installPassword: String
+        switch profile.authMethod {
+        case .password:
+            installPassword = password
+        case .key, .agent:
+            // Need a password to authenticate for key install
+            if keyInstallPassword.isEmpty {
+                showingKeyInstallPasswordPrompt = true
+                return
+            }
+            installPassword = keyInstallPassword
+        }
+
         isInstallingKey = true
         keyInstallResult = nil
 
-        // Build auth method - need password for initial connection
-        let authMethod: TransportConfig.AuthMethod
-        switch profile.authMethod {
-        case .password:
-            authMethod = .password(password)
-        case .key, .agent:
-            // If already using key auth, we still need password to install new key
-            // Show error asking user to enter password
-            keyInstallResult = .failure("Enter password to install key")
-            isInstallingKey = false
-            return
-        }
+        let authMethod: TransportConfig.AuthMethod = .password(installPassword)
 
         let config = TransportConfig(
             host: profile.hostname,
@@ -725,6 +738,7 @@ struct ProfileEditorView: View {
                         keyInstallResult = .keyInstalled
                         // Switch profile to key auth
                         profile.authMethod = .key(keyId: nil)
+                        keyInstallPassword = ""
                     } else {
                         keyInstallResult = .failure("Unexpected response: \(output)")
                     }

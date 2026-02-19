@@ -65,9 +65,11 @@ struct WelcomeView: View {
                                 .opacity(animateIn ? 1 : 0)
                                 .animation(.easeOut(duration: 0.5).delay(0.3), value: animateIn)
                         } else {
-                            // Recent servers
+                            // Recent servers (sorted by last connected)
                             LaunchPanel(
-                                servers: Array(appState.serverProfiles.prefix(3)),
+                                servers: Array(appState.serverProfiles
+                                    .sorted { ($0.lastConnected ?? .distantPast) > ($1.lastConnected ?? .distantPast) }
+                                    .prefix(3)),
                                 onSelect: connectTo,
                                 onManage: { showingProfiles = true },
                                 onBrowseApps: { showingTUIGallery = true }
@@ -152,6 +154,11 @@ struct WelcomeView: View {
     private func connectTo(profile: ServerProfile) {
         // Generate zellij-style session name (adjective-noun)
         let sessionName = generateZellijStyleName()
+
+        // Update last connected timestamp
+        if let index = appState.serverProfiles.firstIndex(where: { $0.id == profile.id }) {
+            appState.serverProfiles[index].lastConnected = Date()
+        }
 
         // Create session directly using sessionStore - goes straight to terminal
         sessionStore.createSession(

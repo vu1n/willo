@@ -119,6 +119,8 @@ private struct FontTabContent: View {
 
     var body: some View {
         ScrollView {
+            // Ensure bundled fonts are registered before displaying options
+            let _ = GlyphAtlas.ensureFontsRegistered()
             VStack(spacing: 20) {
                 // Font Family Section
                 SettingsSection(title: "Font Family", icon: "character") {

@@ -5,11 +5,32 @@ struct SessionTabBar: View {
     @EnvironmentObject var sessionStore: SessionStore
     let highlightedSessionId: UUID?
     let onAddSession: () -> Void
+    var onManageServers: (() -> Void)?
 
     @Namespace private var tabNamespace
 
     var body: some View {
         HStack(spacing: 0) {
+            // Servers button
+            if let onServers = onManageServers {
+                Button(action: onServers) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background {
+                            Circle()
+                                .fill(Color.machineGray)
+                                .overlay {
+                                    Circle()
+                                        .strokeBorder(Color.bezelLight.opacity(0.3), lineWidth: 1)
+                                }
+                        }
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 12)
+            }
+
             // Session tabs
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -272,9 +293,21 @@ struct CompactSessionTabBar: View {
     @EnvironmentObject var sessionStore: SessionStore
     let highlightedSessionId: UUID?
     let onAddSession: () -> Void
+    var onManageServers: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 0) {
+            // Servers button
+            if let onServers = onManageServers {
+                Button(action: onServers) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 16)
+            }
+
             // Session dots
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {

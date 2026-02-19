@@ -268,6 +268,13 @@ final class SessionStore: ObservableObject {
         setActiveSession(sessions[previousIndex].id)
     }
 
+    /// Update the server profile for a session (e.g., after toggling SSH/Mosh)
+    func updateServerProfile(_ profile: ServerProfile, for sessionId: UUID) {
+        if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+            sessions[index].serverProfile = profile
+        }
+    }
+
     /// Close and remove a session
     func closeSession(_ sessionId: UUID) {
         // Stop Zellij bridge if active
